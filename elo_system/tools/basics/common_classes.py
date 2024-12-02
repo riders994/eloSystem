@@ -4,7 +4,9 @@ class EloBase:
 
     league_config = dict()
     league_id = None
-
+    '''
+    Base class for all Elo System related functionality
+    '''
     def __init__(self, league_config: dict = None) -> None:
         if league_config:
             self.load_league(league_config)

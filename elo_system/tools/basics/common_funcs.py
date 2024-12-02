@@ -1,7 +1,5 @@
 import pandas as pd
 import numpy as np
-import math
-
 
 
 def elo_share(elo):
@@ -76,7 +74,6 @@ def trin_elo_calc(player_1, player_2, k=60, proba=False):
 
 def median_elo_calc(player_scores, player_elos, k=60, proba=False) -> pd.Series:
     median_elo = np.array(len(player_scores)*[1500])
-
     normed_scores = (player_scores - min(player_scores)) / (max(player_scores) - min(player_scores))
     median = np.median(normed_scores)
 
@@ -84,5 +81,5 @@ def median_elo_calc(player_scores, player_elos, k=60, proba=False) -> pd.Series:
 
     if proba:
         pass
-    return player_elos + (k * (normed_scores - median) * math.log(1 + winners * (normed_scores - median)) * 2.2 /
+    return player_elos + (k * (normed_scores - median) * np.log(1 + winners * (normed_scores - median)) * 2.2 /
             (2.2 + winners * (player_elos - median_elo) / 1000))
