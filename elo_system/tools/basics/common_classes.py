@@ -13,7 +13,7 @@ class EloBase:
 
     def load_league(self, league_config: dict) -> None:
         self.league_config = league_config
-        self._unload()
+        self._load()
 
-    def _unload(self):
+    def _load(self):
         self.league_id = self.league_config['league_id']

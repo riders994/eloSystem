@@ -7,18 +7,18 @@ def elo_share(elo):
 
 
 def elo_expected(r1, r2):
-    return np.array(r1, r2)/(r1 + r2)
+    return np.array([r1, r2])/(r1 + r2)
 
 
 def week_formatter(week):
     s = week.split(':')
     if len(s) - 1:
         try:
-            return range(int(s[0]), int(s[-1]) + 1), True
+            return range(int(s[0]), int(s[-1]) + 1)
         except ValueError:
             return
     else:
-        return int(week), False
+        return int(week)
 
 
 def score_elo_calc(player_1, player_2, k=60, proba=False):
