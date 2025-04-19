@@ -105,6 +105,6 @@ if __name__ == '__main__':
         # sleeper_test,
         fantrax_test,
     ]:
-        test.run(weeks='0:20')
+        test.run(weeks='0:24')
         test.publish(True).to_csv('./seasonal_elos1.csv')
         print('done')

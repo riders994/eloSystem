@@ -161,32 +161,32 @@ class NBACalculator(Calculator):
         for player_1_id in scoreboard.index:
             if player_1_id not in calced:
                 player_2_id = scoreboard['opponent'][player_1_id]
-
-                #                 _logger.info('Calculating for %s vs. %s', player_1, player_2)
-                player_1_data = [
-                    self.seasonal_elo_frame.loc[player_1_id, last_week] * 1.0, true_scores[player_1_id]
-                ]
-                player_2_data = [
-                    self.seasonal_elo_frame.loc[player_2_id, last_week] * 1.0, true_scores[player_2_id]
-                ]
-                scores = self.calculator(player_1_data, player_2_data, self.k)
-                #                 _logger.info('Adding scores to new week')
-                new_week.update({player_1_id: scores[0]})
-                new_week.update({player_2_id: scores[1]})
-                calced.add(player_1_id)
-                calced.add(player_2_id)
-                if dynasty_week:
-                    d_last_week = 'week_{}'.format(dynasty_week - 1)
+                if 'bye' not in {player_1_id, player_2_id}:
+                    #                 _logger.info('Calculating for %s vs. %s', player_1, player_2)
                     player_1_data = [
-                        self.dynasty_elo_frame.loc[player_1_id, d_last_week] * 1.0, true_scores[player_1_id]
+                        self.seasonal_elo_frame.loc[player_1_id, last_week] * 1.0, true_scores[player_1_id]
                     ]
                     player_2_data = [
-                        self.dynasty_elo_frame.loc[player_2_id, d_last_week] * 1.0, true_scores[player_2_id]
+                        self.seasonal_elo_frame.loc[player_2_id, last_week] * 1.0, true_scores[player_2_id]
                     ]
                     scores = self.calculator(player_1_data, player_2_data, self.k)
-                    new_dynasty.update({player_1_id: scores[0]})
-                    new_dynasty.update({player_2_id: scores[1]})
-        #         _logger.info('Writing to frame')
+                    #                 _logger.info('Adding scores to new week')
+                    new_week.update({player_1_id: scores[0]})
+                    new_week.update({player_2_id: scores[1]})
+                    calced.add(player_1_id)
+                    calced.add(player_2_id)
+                    if dynasty_week:
+                        d_last_week = 'week_{}'.format(dynasty_week - 1)
+                        player_1_data = [
+                            self.dynasty_elo_frame.loc[player_1_id, d_last_week] * 1.0, true_scores[player_1_id]
+                        ]
+                        player_2_data = [
+                            self.dynasty_elo_frame.loc[player_2_id, d_last_week] * 1.0, true_scores[player_2_id]
+                        ]
+                        scores = self.calculator(player_1_data, player_2_data, self.k)
+                        new_dynasty.update({player_1_id: scores[0]})
+                        new_dynasty.update({player_2_id: scores[1]})
+            #         _logger.info('Writing to frame')
         for k, v in self.seasonal_elo_frame[last_week].items():
             if not new_week.get(k):
                 new_week.update({k: v})

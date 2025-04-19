@@ -109,7 +109,7 @@ class FantraxScraper(LeagueScraper):
                 i += 1
                 if not self.scoring_periods.get('P{}'.format(i)):
                     p_end = True
-            self.playoff_start = len(self.scoring_periods) - i + 1
+            self.playoff_start = len(self.scoring_periods) - i + 2
             return self.playoff_start
         else:
             self.login()
@@ -126,11 +126,12 @@ class FantraxScraper(LeagueScraper):
     def login(self) -> FantraxAPI:
         self.league_wrapper = FantraxAPI(league_id=self.league_id)
         self.scoring_periods = self.league_wrapper.scoring_periods()
+        self.scoring_periods.update(self.league_wrapper.playoffs())
         return self.league_wrapper
 
     def get_scoreboard(self, week: int):
         if week < self.playoff_start:
-            pweek = str(week)
+            pweek = 'S{}'.format(week)
         else:
             pweek = 'P{}'.format(week - self.playoff_start + 1)
         self.current_matchup = None

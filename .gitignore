@@ -1,4 +1,5 @@
 tests/__pycache__
-elo_system/tools/__pycache__
 elo_system/__pycache__
+elo_system/tools/__pycache__
+elo_system/tools/basics/__pycache__
 .idea/*

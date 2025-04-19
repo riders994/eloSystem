@@ -66,11 +66,15 @@ class FantraxFormatter(Formatter):
 
     def nba(self, scoreboard: ScoringPeriod):
         matchup_dict = dict()
-        for matchup in scoreboard.matchups:
-            matchup_dict.update(matchup.breakdown)
-        board_df = pd.DataFrame.from_dict(matchup_dict, orient='index')
+        for matchup in scoreboard.matchups.values():
+            matchup_dict.update({
+                matchup.home.team_id: matchup.home_categories,
+                matchup.away.team_id: matchup.away_categories,
+            })
+        board_df = pd.DataFrame.from_dict(matchup_dict, orient='index').rename(columns={'Pts': 'true_score'})
+        board_df['true_score'] = board_df['true_score']/9
         if self.roto:
-            return self.roto(board_df)
+            return self._roto(board_df)
         return board_df
 
     def nfl(self, scoreboard):
