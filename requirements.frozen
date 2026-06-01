@@ -1,0 +1,7 @@
+git+https://github.com/riders994/FantraxAPI.git
+numpy==2.3.2
+pandas==2.3.2
+sleeper==2.0.0
+pyyaml==6.0.2
+pip-tools
+requests==2.32.5

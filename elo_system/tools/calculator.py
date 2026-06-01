@@ -3,17 +3,19 @@ from .basics import median_elo_calc, score_elo_calc, bin_elo_calc, trin_elo_calc
 import pandas as pd
 import numpy as np
 
+from typing import Any
+
 
 class Calculator(Formatter):
 
     is_dynasty = False
-    loaded = False
     osa_factor = .4
     k = 60
 
     team_elo_frame = None
     dynasty_elo_frame = None
     seasonal_elo_frame = None
+    league_years = None
 
     def __init__(self, league_config: dict = dict()) -> None:
         super().__init__(league_config=league_config)
@@ -26,7 +28,7 @@ class Calculator(Formatter):
     def _generate(self, schemas: list = None, schema: str = 'seasonal_elo_frame') -> None:
         if isinstance(schemas, list):
             for s in schemas:
-                self._generate(s)
+                self._generate(schema=s)
         dim = len(self.members)
         if dim:
             setattr(self, schema, self._elo_gen())
@@ -35,13 +37,26 @@ class Calculator(Formatter):
         super()._load()
         self.is_dynasty = self.league_config.get('is_dynasty', False)
         self.osa_factor = self.league_config.get('osa_factor', self.osa_factor)
+        self.league_years = self.league_config.get('league_years', self.league_years)
         self.k = self.league_config.get('k', self.k)
 
-    def load(self, ratings_frames: dict[pd.DataFrame] = None) -> None:
+    def _dump(self) -> None:
+        super()._dump()
+        self.league_config['is_dynasty'] = self.is_dynasty
+        self.league_config['osa_factor'] = self.osa_factor
+        self.league_config['league_years'] = self.league_years
+        self.league_config['k'] = self.k
+
+    def load(self, ratings_frames: dict[Any, Any] = None) -> None:
         self._load()
         if ratings_frames:
             self.load_ratings(ratings_frames)
         self.loaded = True
+
+    def clear_frames(self):
+        self.team_elo_frame = None
+        self.dynasty_elo_frame = None
+        self.seasonal_elo_frame = None
 
     def load_ratings(self, ratings_frames: dict) -> None:
         for schema, frame in ratings_frames.items():
@@ -67,7 +82,7 @@ class Calculator(Formatter):
                 dynasty_week = len(self.dynasty_elo_frame.columns)
                 self._run_elo(scoreboard, week=week, dynasty_week=dynasty_week)
         else:
-            if self.dynasty_elo_frame:
+            if self.dynasty_elo_frame is not None:
                 dynasty_week = len(self.dynasty_elo_frame.columns)
                 d_elo_vec = self.dynasty_elo_frame['week_{}'.format(dynasty_week - 1)]
                 osa_results = self._osa(d_elo_vec)
@@ -85,7 +100,7 @@ class Calculator(Formatter):
     def _run(self, scoreboard: pd.DataFrame, week: int, overwrite: bool = True) -> pd.Series:
             complete = False
             if not overwrite:
-                complete = bool(self.seasonal_elo_frame.get('week_{}'.format(week)))
+                complete = isinstance(self.seasonal_elo_frame.get('week_{}'.format(week)), pd.Series)
             if not complete:
                 self._run_elo(scoreboard, week=week)
 
@@ -96,6 +111,7 @@ class Calculator(Formatter):
         else:
             self._generate()
         self.loaded = True
+
 
     def run(self, week: int, scoreboard: pd.DataFrame = None,  overwrite: bool = True):
         self._load()
@@ -114,13 +130,6 @@ class Calculator(Formatter):
             if week == 0:
                 return self.generate()
             raise AssertionError
-
-    def publish(self):
-        if self.is_dynasty:
-            df = self.dynasty_elo_frame.copy()
-        else:
-            df = self.seasonal_elo_frame.copy()
-        return df
 
 
 class NFLCalculator(Calculator):

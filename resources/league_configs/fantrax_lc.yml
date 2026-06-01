@@ -1,19 +1,53 @@
+archived_league_years: {}
+config_name: fantrax_lc.yml
+current_season_length: 24
+current_sports_year: 2025
+dynasty_end_col: 0
+ext_id: 0
+first_season: 2024
 is_dynasty: false
-league_id: blk3bn3clw9njuhc
+league_years:
+  2024:
+    league_id: blk3bn3clw9njuhc
+    members:
+      2a05v3nqlyeoungp: Kim Bron Son
+      2xu1devwm0bjei18: Akarmazin
+      30h033nnm0bh91qh: dbyun89
+      74t78izqm0qzwzfj: Teenage Mutant Ninja Poetls
+      8htvwcrfm0qr5sjr: LeBong James
+      adttryflm0pkn2wq: Tembanyama
+      b8olxjygm0cm28bz: Good Night and Good Luka
+      evbzwszlm0b6kra7: fuzzard
+      g3y7fcpkm0pw1jt7: 'Jokic: Folie A Deux'
+      gg1dbl9mm0bqytsx: Edey Money Sniper
+      leh8l79dm0ba71jn: ChampagniePapi
+      mpli6vihm254krn3: Clingan On
+      okywfp4xm0box72u: 10connorsj
+      ruudvy6im0clhlzl: johqui1092
+  2025:
+    league_id: wserh14rmbbpqtcg
+    members: &id001
+      1whyncpkmbbpqtde: Ant-ticpating wins
+      37qh4p9hmbbpqtda: Streakbreaker
+      4yyl8b4zmbbpqtdf: Kevin's Burning Bridges
+      6opephu1mbbpqtd4: ZuPacalypse Now
+      dsc6n4m7mbbpqtd9: French Wembassy
+      evxa110cmbsrvnzo: "Nico\u2019s revenge"
+      go0nvgbbmbbpqtdk: Trusting the Process
+      kcfqqbj1mbbpqtd6: Teenage Mutant Ninja Poetls
+      qoi1wvdombbpqtdj: Good Night and Good Luka
+      w04t9xtjmbbpqtdl: dbyun89
+      wt04d24vmbbpqtdb: Kawhi-tly Planting Trees
+      x4jqi3xhmbbpqtdh: Minotts Restriction
+      xbrhksm0mbbpqtdd: johqui1092
+      y3cjxg8cmbbpqtd7: Testicular Injury Reserve
+      z9ns2b34mbbpqtdn: Clingan On
+      zvlomlzhmbodm7p8: kashmoney387
 ltype: fantrax
-members:
-  2a05v3nqlyeoungp: Kim Bron Son
-  2xu1devwm0bjei18: Akarmazin
-  30h033nnm0bh91qh: dbyun89
-  74t78izqm0qzwzfj: Teenage Mutant Ninja Poetls
-  8htvwcrfm0qr5sjr: LeBong James
-  adttryflm0pkn2wq: Tembanyama
-  b8olxjygm0cm28bz: Good Night and Good Luka
-  evbzwszlm0b6kra7: fuzzard
-  g3y7fcpkm0pw1jt7: 'Jokic: Folie A Deux'
-  gg1dbl9mm0bqytsx: Edey Money Sniper
-  leh8l79dm0ba71jn: ChampagniePapi
-  mpli6vihm254krn3: Clingan On
-  okywfp4xm0box72u: 10connorsj
-  ruudvy6im0clhlzl: johqui1092
+members: *id001
+nickname: MMM
+playoff_start: 22
+resource_dir: resources
+roto: false
 sport: nba
+tags: null
