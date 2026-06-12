@@ -1,0 +1,152 @@
+from typing import Any
+
+import pandas as pd
+from .basics import EloBase, WEEK_STR
+from tools.calculator import offseason_adjustment
+
+
+class FrameManager(EloBase):
+    level = 'seasons'
+
+    def __init__(self, config: dict[str, Any]):
+        self.seasonal_elo = dict()
+        self.dynasty_elo = None
+
+        self.roto_history = dict()
+
+        self.is_dynasty = config.get("is_dynasty", False)
+        self.is_roto = config.get("is_roto", False)
+        self.osa_factor = config.get("osa_factor", 0.4)
+
+        super().__init__(config)
+
+        self.member_dict = {k: v.get('league_members') for k, v in self.config.items()}
+
+    @staticmethod
+    def _validate_load_frame(frame) -> bool:
+        s = frame.shape
+        if s[0] % 2 == 1:
+            return False
+        for i in range(s[1]):
+            if frame.get(WEEK_STR.format(i)) is None:
+                return False
+        return True
+
+    def validate_season(self, season: int) -> bool:
+        w = self.config[season]['current_season_length']
+        if self.is_roto:
+            frame = self.roto_history[season]
+        else:
+            frame = self.seasonal_elo[season]
+        return frame.get(WEEK_STR.format(w)) is not None
+
+    def _check_consecutive_seasons(self) -> bool:
+        s = min(list(self.config.keys()))
+        l = len(list(self.config.keys()))
+        for i in range(s, s + l):
+            if self.config.get(i) is None:
+                return False
+        return True
+
+    def can_dynasty(self) -> bool:
+        if not self._check_consecutive_seasons():
+            return False
+
+        return True
+
+    def load_frame(self, destination: str, frame: pd.DataFrame, year: int | None = None) -> None:
+        if self._validate_load_frame(frame):
+            pass
+        else:
+            pass
+
+    def get_current_sports_year(self):
+        return max(list(self.config.keys()))
+
+    def _reset_is_dynasty(self) -> None:
+        if self.is_dynasty:
+            self.is_dynasty = False
+        else:
+            self.is_dynasty = True
+
+    def set_is_dynasty(self, to: bool | None = None) -> None:
+        if to is None:
+            self._reset_is_dynasty()
+        else:
+            self.is_dynasty = to
+
+    def _gen_dynasty_elo(self, season: int | None = None, overwrite: bool = True) -> None:
+        if self.dynasty_elo is None:
+            self.dynasty_elo = self.seasonal_elo[season].copy()
+        else:
+            dynasty_week = self.config[season]['dynasty_start_week']
+            if not overwrite:
+                if self.dynasty_elo.get(WEEK_STR.format(dynasty_week)) is not None:
+                    return None
+            latest_col = f"week_{dynasty_week - 1}"
+            new_col = f"week_{dynasty_week}"
+
+            next_ids = list(self.config[season]['league_members'].keys())
+            new_ids = [tid for tid in next_ids if tid not in self.dynasty_elo.index]
+
+            df = self.dynasty_elo.reindex(self.dynasty_elo.index.union(new_ids, sort=False))
+
+            ratings = df.loc[next_ids, latest_col].fillna(1500.0)
+            updated = offseason_adjustment(ratings, self.osa_factor)
+
+            df[new_col] = df[latest_col]
+            df.loc[next_ids, new_col] = updated
+            self.dynasty_elo = df
+        return None
+
+    def _gen_elo(self, season: int | None = None, overwrite: bool = True) -> None:
+        if season is None:
+            for s in self.config.keys():
+                self._gen_elo(s, overwrite)
+
+        if self.is_dynasty:
+            self._gen_dynasty_elo(season, overwrite)
+
+        if not overwrite:
+            if self.seasonal_elo.get(season) is not None:
+                return None
+        players = self.member_dict[season]
+        self.seasonal_elo[season] = pd.DataFrame(
+            {'week_0': [1500] * len(players)}, index=list(players.keys())
+        )
+
+        return None
+
+    def _set_dynasty_elo(self, frame: pd.DataFrame, season: int | None = None) -> None:
+        if season is None:
+            self.dynasty_elo = frame
+
+    def _set_elo(self, frame: pd.DataFrame, season: int | None = None) -> None:
+        self.seasonal_elo[season] = frame
+        if self.is_dynasty:
+            self._set_dynasty_elo(frame, season)
+
+    def _gen_roto(self, season: int | None = None, overwrite: bool = True) -> None:
+        if season is None:
+            for s in self.config.keys():
+                self._gen_roto(s, overwrite)
+
+        if not overwrite:
+            if self.roto_history.get(season) is not None:
+                return None
+        self.roto_history[season] = pd.DataFrame(index=list(self.member_dict[season].keys()))
+        return None
+
+    def _set_roto(self, frame: pd.DataFrame, season: int | None = None) -> None:
+        if season is None:
+            self.roto_history[self.current_sports_year] = frame
+        else:
+            self.roto_history[season] = frame
+
+    def generate(self, season: int | None = None, overwrite: bool = False) -> None:
+        if season is None:
+            season = self.current_sports_year
+            self.generate(season, overwrite)
+        if self.is_roto:
+            self._gen_roto(season, overwrite)
+        self._gen_elo(season, overwrite)

@@ -1,12 +1,110 @@
-from .formatter import Formatter
-from .basics import median_elo_calc, score_elo_calc, bin_elo_calc, trin_elo_calc
+from .basics import (
+    median_elo_calc,
+    score_elo_calc,
+    bin_elo_calc,
+    trin_elo_calc,
+    EloBase,
+    WEEK_STR
+)
 import pandas as pd
 import numpy as np
 
 from typing import Any
 
 
-class Calculator(Formatter):
+def offseason_adjustment(ratings: pd.Series, factor: float = 0.4) -> pd.Series:
+    if factor >= 1:
+        raise ValueError
+    if factor <= 0:
+        raise ValueError
+    return ((ratings - 1500) * (1 - factor)) + 1500
+
+def nba_calculator(
+        elo_frame: pd.DataFrame,
+        score_frame: pd.DataFrame,
+        week: int | None = None,
+        overwrite: bool = False,
+        scoring: str = 'default',
+        k: float = 60,
+) -> pd.DataFrame:
+    if scoring == 'default':
+        elo_func = score_elo_calc
+    elif scoring == 'trinary':
+        elo_func = trin_elo_calc
+    elif scoring == 'binary':
+        elo_func = bin_elo_calc
+    else:
+        raise ValueError
+    if week is None:
+        week = elo_frame.shape[1] - 1
+    this_week = WEEK_STR.format(week)
+    last_week = WEEK_STR.format(week - 1)
+    if not overwrite:
+        if this_week in elo_frame.columns:
+            return elo_frame
+
+    new_week = dict()
+    calced = set()
+    true_scores = score_frame['true_score']
+
+    for player_1_id in score_frame.index:
+        if player_1_id not in calced:
+            player_2_id = score_frame['opponent'][player_1_id]
+            if isinstance(player_2_id, str):
+                if len(player_1_id):
+                    #                 _logger.info('Calculating for %s vs. %s', player_1, player_2)
+                    player_1_data = [
+                        elo_frame.loc[player_1_id, last_week] * 1.0, true_scores[player_1_id]
+                    ]
+                    player_2_data = [
+                        elo_frame.loc[player_2_id, last_week] * 1.0, true_scores[player_2_id]
+                    ]
+                    scores = elo_func(player_1_data, player_2_data, k)
+                    #                 _logger.info('Adding scores to new week')
+                    new_week.update({player_1_id: scores[0]})
+                    new_week.update({player_2_id: scores[1]})
+                    calced.add(player_1_id)
+                    calced.add(player_2_id)
+        #         _logger.info('Writing to frame')
+    for k, v in elo_frame[last_week].items():
+        if new_week.get(k) is None:
+            new_week.update({k: v})
+    elo_frame[this_week] = pd.Series(new_week)
+
+    return  elo_frame
+
+def nfl_calculator(
+        elo_frame: pd.DataFrame,
+        score_frame: pd.DataFrame,
+        scoring: str = 'default',
+        week: int | None = None,
+        osa_factor: float = 0.4,
+        k: float = 60,
+        overwrite: bool = False,
+):
+    if scoring in {'default', 'median'}:
+        elo_func = median_elo_calc
+    else:
+        raise ValueError
+    if week is None:
+        week = score_frame.shape[1] - 1
+    this_week = WEEK_STR.format(week)
+    last_week = WEEK_STR.format(week - 1)
+    if not overwrite:
+        if this_week in elo_frame.columns:
+            return elo_frame
+
+
+
+    scores = score_frame.scores.values
+    s_elo_vec = elo_frame[last_week]
+    s_res_elos = median_elo_calc(scores, s_elo_vec, k)
+    elo_frame[this_week] = s_res_elos
+
+    return elo_frame
+
+
+class nCalculator(EloBase):
 
     is_dynasty = False
     osa_factor = .4
@@ -130,80 +228,3 @@ class Calculator(Formatter):
             if week == 0:
                 return self.generate()
             raise AssertionError
-
-
-class NFLCalculator(Calculator):
-
-    def _run_elo(self, scoreboard, week: int = None, dynasty_week: int = None):
-        scores = scoreboard.scores.values
-        s_elo_vec = self.seasonal_elo_frame['week_{}'.format(week - 1)]
-        s_res_elos = median_elo_calc(scores, s_elo_vec, self.k)
-        self.seasonal_elo_frame['week_{}'.format(week)] = s_res_elos
-        if dynasty_week:
-            d_elo_vec = self.dynasty_elo_frame['week_{}'.format(dynasty_week - 1)]
-            d_res_elos = median_elo_calc(scores, d_elo_vec)
-            self.dynasty_elo_frame['week_{}'.format(dynasty_week)] = d_res_elos
-
-class NBACalculator(Calculator):
-    scoring = 'score'
-
-    def __init__(self, league_config: dict = dict()) -> None:
-        super().__init__(league_config=league_config)
-        self._load()
-        if self.scoring == 'score':
-            self.calculator = score_elo_calc
-        elif self.scoring == 'binary':
-            self.calculator = bin_elo_calc
-        elif self.scoring == 'trinary':
-            self.calculator = trin_elo_calc
-
-    def _load(self) -> None:
-        super()._load()
-        self.scoring = self.league_config.get('scoring', self.scoring)
-
-    def _run_elo(self, scoreboard, week: int = None, dynasty_week: int = None):
-        last_week = 'week_{}'.format(week - 1)
-        new_week = dict()
-        calced = set()
-        true_scores = scoreboard['true_score']
-        new_dynasty = dict()
-        for player_1_id in scoreboard.index:
-            if player_1_id not in calced:
-                player_2_id = scoreboard['opponent'][player_1_id]
-                if 'bye' not in {player_1_id, player_2_id}:
-                    #                 _logger.info('Calculating for %s vs. %s', player_1, player_2)
-                    player_1_data = [
-                        self.seasonal_elo_frame.loc[player_1_id, last_week] * 1.0, true_scores[player_1_id]
-                    ]
-                    player_2_data = [
-                        self.seasonal_elo_frame.loc[player_2_id, last_week] * 1.0, true_scores[player_2_id]
-                    ]
-                    scores = self.calculator(player_1_data, player_2_data, self.k)
-                    #                 _logger.info('Adding scores to new week')
-                    new_week.update({player_1_id: scores[0]})
-                    new_week.update({player_2_id: scores[1]})
-                    calced.add(player_1_id)
-                    calced.add(player_2_id)
-                    if dynasty_week:
-                        d_last_week = 'week_{}'.format(dynasty_week - 1)
-                        player_1_data = [
-                            self.dynasty_elo_frame.loc[player_1_id, d_last_week] * 1.0, true_scores[player_1_id]
-                        ]
-                        player_2_data = [
-                            self.dynasty_elo_frame.loc[player_2_id, d_last_week] * 1.0, true_scores[player_2_id]
-                        ]
-                        scores = self.calculator(player_1_data, player_2_data, self.k)
-                        new_dynasty.update({player_1_id: scores[0]})
-                        new_dynasty.update({player_2_id: scores[1]})
-            #         _logger.info('Writing to frame')
-        for k, v in self.seasonal_elo_frame[last_week].items():
-            if not new_week.get(k):
-                new_week.update({k: v})
-        self.seasonal_elo_frame['week_{}'.format(week)] = pd.Series(new_week)
-        if dynasty_week:
-            for k, v in self.dynasty_elo_frame[d_last_week].items():
-                if not new_dynasty.get(k):
-                    new_dynasty.update({k: v})
-            self.dynasty_elo_frame['week_{}'.format(dynasty_week)] = pd.Series(new_dynasty)
-
-

@@ -1,10 +1,17 @@
 from typing import Any
+import time
 
 import pandas as pd
 
-from tools import SleeperScraper, FantraxFormatter, SleeperFormatter, NBACalculator, NFLCalculator, FantraxLeague
-
 from tools.basics import week_formatter, EloBase
+from tools import (
+    League,
+    FantraxLeague,
+    fantrax_formatter,
+    FrameManager,
+    nba_calculator,
+    nfl_calculator
+)
 import os
 import yaml
 
@@ -28,232 +35,334 @@ SLEEPER_IDS = [
     '',
 ]
 
-class EloSystem(EloBase):
+class EloData(EloBase):
+    pass
 
-    calculator = None
-    formatter = None
-    league = None
-    scraper = None
+class EloSQL(EloData):
+    pass
 
-    config_name = None
-    resource_dir = None
-    is_dynasty = False
-    league_years = None
+class EloCSV(EloData):
+    pass
 
 
-    def __init__(self, config_input, name: str):
-        self.config_name = name
-        if isinstance(config_input, dict):
-            league_config = config_input
-        elif isinstance(config_input, str):
-            self.resource_dir = config_input
-            league_config = self._read_config(name)
-        super().__init__(league_config)
+class EloLeague(EloBase):
+    
+    def __init__(self, config: dict | None = None) -> None:
+        self.leagues = dict()
+        self.seasons = dict()
 
-    def _read_config(self, name) -> dict:
-        with open(os.path.join('..', self.resource_dir, CONFIG_DIR, name)) as f:
-            return yaml.safe_load(f)
+        self.current_league = None
 
-    def _write_config(self):
-        with open(os.path.join('..', self.resource_dir, CONFIG_DIR, self.config_name), 'w') as f:
-            yaml.safe_dump(self.league_config, f)
+        self.current_season = None
+        self.is_dynasty = False
+        self.is_roto = False
+        self.platform = None
+        self.league_type = None
 
-    def _get_elo_path(self, location = None):
-        if location is None:
-            location = ELO_DIR
-        return os.path.join('..', self.resource_dir, location)
+        self.season_stats = {
+            'playoff_start': dict(),
+            'season_length': dict()
+        }
 
-    def _get_season_number(self) -> int:
-        return list(self.league_years.keys()).index(self.league.current_sports_year)
+        self.calculator = None
+        self.formatter = None
+        self.frame_manager = None
 
-    def _get_league(self):
-        ltype = self.league_config.get('ltype', 'sleeper')
-        if ltype == 'sleeper':
-            self.league = SleeperScraper(league_config=self.league_config)
-        elif ltype == 'fantrax':
-            self.league = FantraxLeague(league_config=self.league_config)
-        else:
-            raise ValueError
-        self.league.load()
-        self.scraper = self.league.get_scraper()
+        super().__init__(config)
 
-    def _get_formatter(self):
-        ltype = self.league_config.get('ltype', 'sleeper')
-        if ltype == 'sleeper':
-            self.formatter = SleeperFormatter(league_config=self.league_config)
-        elif ltype == 'fantrax':
-            self.formatter = FantraxFormatter(league_config=self.league_config)
-        else:
-            raise ValueError
-
-    def _get_calculator(self):
-        ltype = self.league_config.get('sport', 'nfl')
-        if ltype == 'nfl':
-            self.calculator = NFLCalculator(league_config=self.league_config)
-        elif ltype == 'nba':
-            self.calculator = NBACalculator(league_config=self.league_config)
-        else:
-            raise ValueError
-
-    def _get_current_week(self, week):
-        return self.calculator.seasonal_elo_frame.get('week_{}'.format(week))
-
-    def _load(self, no_frames: bool = False, ):
+    def _load(self) -> None:
         super()._load()
-        self.resource_dir = self.league_config.get('resource_dir', self.resource_dir)
-        self.config_name = self.league_config.get('config_name', self.config_name)
-        self.is_dynasty = self.league_config.get('is_dynasty', self.is_dynasty)
-        self.league_years = self.league_config.get('league_years', self.league_years)
-        self._get_league()
-        self.league.load()
-        self._get_formatter()
-        self.formatter.load()
-        self._get_calculator()
-        dfs = dict()
-        l = self._get_elo_path()
-        if self.is_dynasty and not no_frames:
-            dynasty_elo_frame = pd.read_csv(os.path.join(l, 'dynasty_elo.csv'), index_col=0)
-            dfs.update({'dynasty_elo_frame': dynasty_elo_frame})
-        if not no_frames:
-            seasonal_elo_frame = pd.read_csv(os.path.join(l, 'seasonal_elos_{}.csv'.format(self._get_season_number())), index_col=0)
-            id_check = seasonal_elo_frame.index.copy()
-            id_check = id_check.map({v:k for k, v in self.league.members.items()})
-            if id_check.hasnans:
-                self.league.update_members()
-                self.load_league(self.league.dump())
-                self._load()
-            seasonal_elo_frame.index = seasonal_elo_frame.index.map({v:k for k, v in self.league.members.items()})
+        self.league_type: str = self.config['league_type']
+        self.platform: str = self.config['platform']
 
-            dfs.update({'seasonal_elo_frame': seasonal_elo_frame})
-        self.calculator.load(dfs)
-
-    def load(self, no_frames: bool = False):
-        self._load(no_frames=no_frames)
-        self.loaded = True
-        return self.league_config
+        self.current_season: int | None = self.config.get('current_season')
+        self.is_dynasty: bool = self.config.get('is_dynasty', False)
+        self.is_roto: bool = self.config.get('is_roto', False)
+        self.seasons.update(self.config.get('seasons', dict()))
+        self.osa_factor: float = self.config.get('osa_factor', .4)
+        self.k: int = self.config.get('k', 60)
+        self.extras = int(self.is_roto) + int(self.is_dynasty)
 
     def _dump(self) -> None:
         super()._dump()
-        self.league_config['resource_dir'] = self.resource_dir
-        self.league_config['config_name'] = self.config_name
-        self.league_config['is_dynasty'] = self.is_dynasty
-        self.league_config['league_years'] = self.league_years
-        self._write_config()
+        self.config.update({
+            'current_season': self.current_season,
+            'is_dynasty': self.is_dynasty,
+            'seasons': self.seasons,
+            'is_roto': self.is_roto,
+            'osa_factor': self.osa_factor,
+            'k': self.k
+        })
 
-    def _change_dynasty(self) -> None:
-        if self.is_dynasty:
-            self.is_dynasty = False
-            self.league.is_dynasty = False
-            self.calculator.is_dynasty = False
-            self.dump()
-        else:
-            self.is_dynasty = True
-            self.league.is_dynasty = True
-            self.calculator.is_dynasty = True
-            self.dump()
+    @staticmethod
+    def _validate_fantrax(seas_dict: dict[str, Any]) -> bool:
+        return seas_dict.get('league_id') is not None
 
-    def build_dynasty(self):
-        if not self.is_dynasty:
-            self._change_dynasty()
-        curr = self.league.current_season_length
-        self.load(True)
-        self.calculator.clear_frames()
-        self.calculator.generate()
-        for y, ly in self.league_years.items():
-            self.league.set_current_sports_year(y)
-            self.league.get_scraper()
-            run_str = f'0:{ly.get('season_length', curr)}'
-            self.run(run_str, True)
-
-
-
-    def _validate_dynasty_frame(self) -> bool:
-        f = self.calculator.dynasty_elo_frame
-        c = self.league.dynasty_end_col
-        if c == f.shape[1]:
-            col_count = 0
-            curr = self.league.current_season_length
-            for y, ly in self.league_years.items():
-                if y != max(self.league_years.keys()):
-                    col_count += 1 + ly.get('season_length', curr)
-            col_count += self.calculator.seasonal_elo_frame.shape[1]
-            return c == col_count
-
+    def _validate_season(self, seas_dict: dict[str, Any]) -> bool:
+        if self.platform == 'fantrax':
+            return self._validate_fantrax(seas_dict)
         return False
 
-    def validate_dynasty(self) -> bool:
-        if self.is_dynasty:
-            if self.calculator.dynasty_elo_frame is not None:
-                return self._validate_dynasty_frame()
-            return False
-        else:
-            ly = self.league_years.keys()
-            return len(ly) == max(ly) - min(ly) + 1
+    def add_season(self, seas_dict: dict[str, Any], year: int, league: bool = False) -> bool:
+        if self._validate_season(seas_dict):
+            if self.platform == 'fantrax':
+                self.seasons.update({year: seas_dict})
 
-    def _run_multiple(self, weeks, overwrite=False):
-        week_range = week_formatter(weeks)
-        for week in week_range:
-            self._run(week, overwrite)
+            if league:
+                self.add_league(year)
+            return True
+        return False
 
-    def _run(self, week, overwrite=False):
-        if week == 0:
-            self.calculator.run(week, overwrite=overwrite)
-        else:
-            board = self.scraper.get_scoreboard(week)
-            formatted = self.formatter.run(board)
-            self.calculator.run(week, formatted, overwrite=overwrite)
+    def _find_season(self, sid: str) -> int:
+        for y, s in self.seasons.items():
+            if s['league_id'] == sid:
+                return y
+        return 0
 
-
-
-    def run(self, weeks, overwrite=False):
-        if isinstance(weeks, int):
-            cw = self._get_current_week(weeks)
-            if cw is not None:
-                if not overwrite:
-                    return cw
-            self._run(weeks, overwrite=overwrite)
-        if isinstance(weeks, str):
-            if weeks.find(':') == -1:
-                self.run(int(weeks), overwrite=overwrite)
+    def remove_season(self, year: int | None = None, league_id: str | None = None) -> dict[str, Any]:
+        if year is None:
+            if league_id is None:
+                raise ValueError
             else:
-                self._run_multiple(weeks, overwrite=overwrite)
-        return self._get_current_week(weeks)
+                year = self._find_season(league_id)
+                if year == 0:
+                    raise ValueError
+        if year not in self.seasons:
+            raise KeyError
+        self.remove_league(year)
+        return self.seasons.pop(year)
 
-    def publish(self, names: bool = False, to_csv: bool = False, location = None):
-        dfs = dict()
-        if self.is_dynasty:
-            df = self.calculator.dynasty_elo_frame.copy()
-            if names:
-                df.index = df.index.map(self.scraper.get_managers())
-            if to_csv:
-                l = self._get_elo_path(location)
-                df.to_csv(os.path.join(l, 'dyansty_elo.csv'))
-            dfs.update({'dynasty': df})
-        df = self.calculator.seasonal_elo_frame.copy()
-        if names:
-            df.index = df.index.map(self.scraper.get_managers())
-        if to_csv:
-            l = self._get_elo_path(location)
-            df.to_csv(os.path.join(l, 'seasonal_elos_{}.csv'.format(self._get_season_number())))
+    def _set_current_league(self):
+        if self.current_league is None:
+            self.add_league(self.current_season)
+        self.current_league = self.leagues[self.current_season]
+        self.current_league.load()
 
-        dfs.update({'seasonal': df})
-        return dfs
+    def set_current_season(self, year: int | None = None) -> int | None:
+        if year is None:
+            self.reset_current_season()
+        else:
+            self.current_season = year
+        self._set_current_league()
+        return self.current_season
+
+    def reset_current_season(self) -> int | None:
+        try:
+            self.current_season = max(list(self.seasons.keys()))
+        except ValueError as e:
+            if 'empty' not in str(e):
+                raise e
+        self._set_current_league()
+        self.current_league = self.leagues.get(self.current_season)
+        if isinstance(self.current_league, League):
+            self.current_league.load()
+
+        return self.current_season
+
+    def compile_season_stats(self) -> dict[str, Any]:
+        pos = dict()
+        sl = dict()
+        for y, seas in self.seasons:
+            pos.update({y: seas['playoff_start']})
+            sl.update({y: seas['season_length']})
+        self.season_stats['playoff_start'].update(pos)
+        self.season_stats['season_length'].update(sl)
+        return self.season_stats
+
+    def add_league(self, league_year: int, overwrite: bool = False) -> None:
+        if overwrite or self.leagues.get(league_year) is None:
+            if self.seasons.get(league_year) is not None:
+                l = FantraxLeague(league_year, self.seasons)
+                l.scrape()
+                self.leagues.update({league_year: l})
+            else:
+                raise KeyError
+
+    def remove_league(self, league_year: str | int) -> None:
+        if isinstance(league_year, int):
+            self.leagues.pop(league_year)
+        elif isinstance(league_year, str):
+            pass
+
+    def _set_calculator(self) -> None:
+        if self.league_type == 'nba':
+            self.calculator = nba_calculator
+        elif self.league_type == 'nfl':
+            self.calculator = nfl_calculator
+        else:
+            raise ValueError('Unknown league type: {}'.format(self.league_type))
+
+    def _set_formatter(self) -> None:
+        if self.platform == 'sleeper':
+            pass
+        elif self.platform == 'fantrax':
+            self.formatter = fantrax_formatter
+
+    def _set_frame_manager(self) -> None:
+        if not isinstance(self.frame_manager, FrameManager):
+            self.frame_manager = FrameManager(self.config)
+
+    def _set_dynasty_start_week(self, year: int | list[int] | None = None):
+        start_season = min(self.seasons.keys())
+        if year is None:
+            year = range(start_season, start_season  + len(self.seasons.keys()))
+        if isinstance(year, int):
+            s = self.seasons[year]
+            w = 0
+            if year != start_season:
+                for y in range(start_season, year):
+                    w += self.seasons[y]['current_season_length']
+                    w += 1
+            s.update({'dynasty_start_week': w})
+        else:
+            for y in year:
+                self._set_dynasty_start_week(y)
 
 
+    def _change_to_dynasty(self):
+        if self.frame_manager.can_dynasty():
+            self.frame_manager.set_is_dynasty(True)
+            for s in self.seasons.keys():
+                self.add_league(s)
+                if not self.frame_manager.validate_season(s):
+                    self.run_season(s)
+            self._set_dynasty_start_week()
+            self.is_dynasty = True
+            self.run_dynasty()
 
+    def change_dynasty(self, to: bool | None = None, delete: bool = False) -> bool:
+        if isinstance(to, bool):
+            if to == self.is_dynasty:
+                return self.is_dynasty
+        else:
+            to = not self.is_dynasty
+        if to:
+            self._change_to_dynasty()
+            return self.is_dynasty
+        else:
+            self.is_dynasty = False
+            if delete:
+                pass
+        return self.is_dynasty
 
-if __name__ == '__main__':
+    def run_prep(self, year: int | None = None):
+        if year is None:
+            year = self.current_sports_year
+        self.add_league(year)
+        self.set_current_season(year)
+        self._set_formatter()
+        self._set_frame_manager()
+        self._set_calculator()
 
-    # sleeper_test = EloSystem(get_config(SLEEPER_LC))
-    fantrax_test = EloSystem(LOCATION, FANTRAX_LC)
+    def _return_frames(self, year: int) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+        if self.extras == 2:
+            return self.frame_manager.seasonal_elo[year], self.frame_manager.dynamic_elo, self.frame_manager.roto_history[year]
+        elif self.extras == 1:
+            if self.is_dynasty:
+                return self.frame_manager.seasonal_elo[year], self.frame_manager.dynamic_elo
+            elif self.is_roto:
+                return self.frame_manager.seasonal_elo[year], self.frame_manager.roto_history[year]
+            return None
+        else:
+            return self.frame_manager.seasonal_elo[year]
 
-    for test in [
-        # sleeper_test,
-        fantrax_test,
-    ]:
-        test.load(True)
-        test.build_dynasty()
-        # test.run(weeks='23:24')
-        test.publish(True, True)
-        test.dump()
-        print('done')
+    def _rename(self, scoreboard: pd.DataFrame, season: int) -> pd.Series:
+        id_map = {v['team_id']: k for k, v in self.seasons[season]['league_members'].items()}
+        return scoreboard['opponent'].map(id_map)
+
+    def _run_one(self, week: int, year: int, overwrite: bool = False) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+        if week == 0:
+            self.frame_manager.generate(year, overwrite)
+        else:
+            formatted_scores = self.formatter(self.league_type, self.current_league.get_week(week))
+            formatted_scores['opponent'] = self._rename(formatted_scores, year)
+            if self.is_dynasty:
+                dynasty_week = week + self.seasons[year]['dynasty_start_week']
+                try:
+                    self.calculator(
+                        self.frame_manager.dynasty_elo,
+                        formatted_scores,
+                        dynasty_week,
+                        overwrite,
+                    )
+                except AttributeError:
+                    raise KeyError('No Dynasty frame initialized')
+            else:
+                try:
+                    self.calculator(
+                        self.frame_manager.seasonal_elo[year],
+                        formatted_scores,
+                        week,
+                        overwrite,
+                    )
+                except KeyError as e:
+                    if e.args[0] == self.current_sports_year:
+                        raise KeyError('Current sports year has no frames')
+        return self._return_frames(year)
+
+    def _run_multiple(self, weeks: str, year: int, overwrite: bool = False) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+        formed_weeks = week_formatter(weeks)
+        if isinstance(formed_weeks, int):
+            self._run_one(formed_weeks, year, overwrite)
+        elif isinstance(formed_weeks, range):
+            for week in formed_weeks:
+                self._run_one(week, year, overwrite)
+        else:
+            raise ValueError
+        return self._return_frames(year)
+
+    def run_dynasty(self, overwrite: bool = False):
+        for s in self.seasons.keys():
+            self.run_season(s)
+
+    def run_season(self, year: int | None = None, overwrite: bool = False, ):
+        if year is None:
+            year = self.current_sports_year
+        self.run_prep(year)
+        weeks = '0:{}'.format(self.seasons[year]['current_season_length'])
+        self._run_multiple(weeks, year, overwrite)
+
+    def run(self, week: int | str, year: int | None = None, overwrite: bool = False, ):
+        if year is None:
+            year = self.current_sports_year
+
+        if isinstance(week, str):
+            return self._run_multiple(week, year, overwrite)
+        else:
+            return self._run_one(week, year, overwrite)
+
+class EloSystem(EloBase):
+
+    league_manager = None
+    data_manager = None
+
+    def _validate_sql_config(self) -> bool:
+        pass
+
+    def read_sql_config(self, config):
+        if self._validate_sql_config():
+            pass
+        pass
+
+    def _validate_csv_config(self) -> bool:
+        pass
+
+    def read_csv_config(self, config):
+        if self._validate_csv_config():
+            pass
+        pass
+
+    def _validate_league_config(self) -> bool:
+        pass
+
+    def read_league_config(self, config):
+        if self._validate_league_config():
+            pass
+        pass
+
+    def publish(self):
+        pass
+
+    def load_league_data(self, data):
+        pass
+

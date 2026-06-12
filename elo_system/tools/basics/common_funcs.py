@@ -10,13 +10,10 @@ def elo_expected(r1, r2):
     return np.array([r1, r2])/(r1 + r2)
 
 
-def week_formatter(week):
+def week_formatter(week: str) -> int | range:
     s = week.split(':')
     if len(s) - 1:
-        try:
-            return range(int(s[0]), int(s[-1]) + 1)
-        except ValueError:
-            return
+        return range(int(s[0]), int(s[-1]) + 1)
     else:
         return int(week)
 

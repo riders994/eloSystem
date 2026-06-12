@@ -1,7 +1,19 @@
-git+https://github.com/riders994/FantraxAPI.git
-numpy==2.3.2
-pandas==2.3.2
-sleeper==2.0.0
-pyyaml==6.0.2
-pip-tools
+certifi==2026.5.20
+charset-normalizer==3.4.7
+fantraxapi @ git+https://github.com/riders994/FantraxAPI.git@stable
+idna==3.17
+numpy==2.4.6
+packaging==25.0
+pandas==3.0.3
+pandas-stubs==3.0.3.260530
+psycopg2-binary==2.9.12
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
 requests==2.32.5
+rv_pytools==1.1.1
+setuptools==82.0.1
+six==1.17.0
+sleeper==2.0.0
+sleeper-api-wrapper==1.2.1
+sleeper-py==1.0.1
+urllib3==2.7.0
