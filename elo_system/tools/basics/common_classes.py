@@ -69,3 +69,12 @@ class EloBase:
     def dump(self) -> dict[str, Any]:
         self._dump()
         return self.config
+
+    def _publish(self) -> dict[str, Any]:
+        payload = {}
+        payload.update({'config': self.config})
+        return payload
+
+    def publish(self) -> dict[str, Any]:
+        payload = self._publish()
+        return payload

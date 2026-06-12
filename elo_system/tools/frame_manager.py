@@ -150,3 +150,12 @@ class FrameManager(EloBase):
         if self.is_roto:
             self._gen_roto(season, overwrite)
         self._gen_elo(season, overwrite)
+
+    def _publish(self) -> dict[str, Any]:
+        payload = super()._publish()
+        if self.is_dynasty:
+            payload['dynasty_elo'] = self.dynasty_elo
+        if self.is_roto:
+            payload['roto_history'] = self.roto_history
+        payload['seasonal_elo'] = self.seasonal_elo
+        return payload

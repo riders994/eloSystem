@@ -322,6 +322,12 @@ class EloLeague(EloBase):
         weeks = '0:{}'.format(self.seasons[year]['current_season_length'])
         self._run_multiple(weeks, year, overwrite)
 
+    def publish(self) -> dict[str, Any]:
+        payload = self.frame_manager.publish()
+        payload.update({'config': self.config})
+
+        return payload
+
     def run(self, week: int | str, year: int | None = None, overwrite: bool = False, ):
         if year is None:
             year = self.current_sports_year
@@ -358,9 +364,6 @@ class EloSystem(EloBase):
     def read_league_config(self, config):
         if self._validate_league_config():
             pass
-        pass
-
-    def publish(self):
         pass
 
     def load_league_data(self, data):
