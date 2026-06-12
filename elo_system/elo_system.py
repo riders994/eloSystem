@@ -3,8 +3,8 @@ import time
 
 import pandas as pd
 
-from tools.basics import week_formatter, EloBase
-from tools import (
+from .tools.basics import week_formatter, EloBase
+from .tools import (
     League,
     FantraxLeague,
     fantrax_formatter,
@@ -16,24 +16,28 @@ import os
 import yaml
 
 
-FANTRAX_LC = 'fantrax_lc.yml'
-SLEEPER_LC = 'sleeper_lc.yml'
+# FANTRAX_LC = 'fantrax_lc.yml'
+# SLEEPER_LC = 'sleeper_lc.yml'
+#
+# LOCATION = 'resources'
+#
+# CONFIG_DIR = 'league_configs'
+#
+# ELO_DIR = 'elos'
+#
+# FANTRAX_IDS = {
+#     2024: 'blk3bn3clw9njuhc',
+#     2025: 'wserh14rmbbpqtcg',
+# }
+#
+# SLEEPER_IDS = [
+#     '',
+#     '',
+# ]
 
-LOCATION = 'resources'
-
-CONFIG_DIR = 'league_configs'
-
-ELO_DIR = 'elos'
-
-FANTRAX_IDS = {
-    2024: 'blk3bn3clw9njuhc',
-    2025: 'wserh14rmbbpqtcg',
+CONFIGS = {
+    'sql', 'csv', 'elo', 'league',
 }
-
-SLEEPER_IDS = [
-    '',
-    '',
-]
 
 class EloData(EloBase):
     pass
@@ -133,7 +137,7 @@ class EloLeague(EloBase):
         return self.seasons.pop(year)
 
     def _set_current_league(self):
-        if self.current_league is None:
+        if self.leagues.get(self.current_season) is None:
             self.add_league(self.current_season)
         self.current_league = self.leagues[self.current_season]
         self.current_league.load()
@@ -162,7 +166,7 @@ class EloLeague(EloBase):
     def compile_season_stats(self) -> dict[str, Any]:
         pos = dict()
         sl = dict()
-        for y, seas in self.seasons:
+        for y, seas in self.seasons.items():
             pos.update({y: seas['playoff_start']})
             sl.update({y: seas['season_length']})
         self.season_stats['playoff_start'].update(pos)
@@ -180,7 +184,7 @@ class EloLeague(EloBase):
 
     def remove_league(self, league_year: str | int) -> None:
         if isinstance(league_year, int):
-            self.leagues.pop(league_year)
+            self.leagues.pop(league_year, None)
         elif isinstance(league_year, str):
             pass
 
@@ -256,10 +260,10 @@ class EloLeague(EloBase):
 
     def _return_frames(self, year: int) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
         if self.extras == 2:
-            return self.frame_manager.seasonal_elo[year], self.frame_manager.dynamic_elo, self.frame_manager.roto_history[year]
+            return self.frame_manager.seasonal_elo[year], self.frame_manager.dynasty_elo, self.frame_manager.roto_history[year]
         elif self.extras == 1:
             if self.is_dynasty:
-                return self.frame_manager.seasonal_elo[year], self.frame_manager.dynamic_elo
+                return self.frame_manager.seasonal_elo[year], self.frame_manager.dynasty_elo
             elif self.is_roto:
                 return self.frame_manager.seasonal_elo[year], self.frame_manager.roto_history[year]
             return None
@@ -339,8 +343,18 @@ class EloLeague(EloBase):
 
 class EloSystem(EloBase):
 
-    league_manager = None
-    data_manager = None
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.data_config_loc = self.config.get('data_config_loc')
+        self.elo_league_config_loc = self.config.get('elo_league_config_loc')
+        self.wd = None
+        self._set_working_directory()
+
+    def _get_working_directory(self):
+        pass
+
+    def _set_working_directory(self):
+        self.wd = self._get_working_directory()
 
     def _validate_sql_config(self) -> bool:
         pass
@@ -366,6 +380,30 @@ class EloSystem(EloBase):
             pass
         pass
 
-    def load_league_data(self, data):
+    def _load_configs(self, configs: dict) -> bool:
+        for k, v in configs.items():
+            if k not in CONFIGS:
+                raise KeyError(k)
+            if k == 'sql':
+                self.read_sql_config(v)
+            elif k == 'csv':
+                self.read_csv_config(v)
+            elif k == 'league':
+                self.read_league_config(v)
+        return True
+
+    def _load_objs(self):
         pass
 
+    def load_configs(self, configs: dict | None = None, sql_config: dict | None = None, csv_config: dict | None = None, league_config: dict | None = None) -> bool:
+        if isinstance(configs, dict):
+            return self._load_configs(configs)
+        else:
+            if isinstance(csv_config, dict):
+                self.read_csv_config(csv_config)
+            elif isinstance(sql_config, dict):
+                self.read_sql_config(sql_config)
+            if isinstance(league_config, dict):
+                self.read_league_config(league_config)
+
+        return True

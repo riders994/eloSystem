@@ -2,7 +2,7 @@ from typing import Any
 
 import pandas as pd
 from .basics import EloBase, WEEK_STR
-from tools.calculator import offseason_adjustment
+from .calculator import offseason_adjustment
 
 
 class FrameManager(EloBase):
@@ -103,17 +103,19 @@ class FrameManager(EloBase):
         if season is None:
             for s in self.config.keys():
                 self._gen_elo(s, overwrite)
+            return None
+
+        if season not in self.config:
+            raise KeyError('Unknown season: {}'.format(season))
+
+        if overwrite or self.seasonal_elo.get(season) is None:
+            players = self.member_dict[season]
+            self.seasonal_elo[season] = pd.DataFrame(
+                {'week_0': [1500] * len(players)}, index=list(players.keys())
+            )
 
         if self.is_dynasty:
             self._gen_dynasty_elo(season, overwrite)
-
-        if not overwrite:
-            if self.seasonal_elo.get(season) is not None:
-                return None
-        players = self.member_dict[season]
-        self.seasonal_elo[season] = pd.DataFrame(
-            {'week_0': [1500] * len(players)}, index=list(players.keys())
-        )
 
         return None
 
@@ -130,6 +132,10 @@ class FrameManager(EloBase):
         if season is None:
             for s in self.config.keys():
                 self._gen_roto(s, overwrite)
+            return None
+
+        if season not in self.config:
+            raise KeyError('Unknown season: {}'.format(season))
 
         if not overwrite:
             if self.roto_history.get(season) is not None:
@@ -146,7 +152,8 @@ class FrameManager(EloBase):
     def generate(self, season: int | None = None, overwrite: bool = False) -> None:
         if season is None:
             season = self.current_sports_year
-            self.generate(season, overwrite)
+            if season is None:
+                season = self.get_current_sports_year()
         if self.is_roto:
             self._gen_roto(season, overwrite)
         self._gen_elo(season, overwrite)

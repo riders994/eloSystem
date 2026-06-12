@@ -58,7 +58,7 @@ def trin_elo_calc(player_1, player_2, k=60, proba=False):
     score2 = player_2[1]
     share_a, share_b = elo_share(r1), elo_share(r2)
 
-    if str(score1) != '.5':
+    if str(score1) != '0.5':
         score1 = round(score1)
         score2 = round(score2)
 

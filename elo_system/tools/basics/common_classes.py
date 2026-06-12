@@ -9,10 +9,10 @@ class EloBase:
 
     level = None
 
-    config = dict()
-    loaded = False
 
     def __init__(self, config: dict | None = None) -> None:
+        self.config = dict()
+        self.loaded = False
         self.current_sports_year = None
         self.league_type = None
         if config:
@@ -24,7 +24,7 @@ class EloBase:
         if level is None:
             self.config = config
         else:
-            self.config = config[self.level]
+            self.config = config[level]
 
     def load_config(self, config: dict) -> None:
         self._load_config(config)
