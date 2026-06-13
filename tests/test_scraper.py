@@ -5,8 +5,8 @@ module's imported name so no test ever touches the network.
 """
 import pytest
 
-from helpers import scraper as scraper_mod
-from helpers.scraper import PLAYOFF_START, FantraxScraper, LeagueScraper
+from elo_system.tools.helpers import scraper as scraper_mod
+from elo_system.tools.helpers.scraper import PLAYOFF_START, FantraxScraper, LeagueScraper
 
 from tests.mocks.fantrax import (
     make_default_teams,
@@ -15,6 +15,25 @@ from tests.mocks.fantrax import (
 )
 
 LEAGUE_ID = 'lg123abc'
+
+
+class _ConcreteScraper(LeagueScraper):
+    """Minimal concrete scraper for exercising the shared base plumbing."""
+
+    def login(self):
+        pass
+
+    def get_members(self):
+        return {}
+
+    def get_scoreboard(self, week):
+        return None
+
+    def get_playoff_start(self):
+        return PLAYOFF_START
+
+    def get_current_season_length(self):
+        return 0
 
 
 def _make_config(**overrides):
@@ -37,13 +56,19 @@ def _patch_ft_league(monkeypatch, playoff_flags, teams=None):
 # LeagueScraper base behavior
 # ---------------------------------------------------------------------------
 
-def test_base_scraper_static_defaults():
-    assert LeagueScraper.get_playoff_start() == PLAYOFF_START
-    assert LeagueScraper.get_current_season_length() == 0
+def test_base_scraper_is_abstract():
+    # LeagueScraper defines the platform interface; it cannot be instantiated
+    # directly, and every platform method is abstract.
+    with pytest.raises(TypeError):
+        LeagueScraper(_make_config())
+    assert LeagueScraper.__abstractmethods__ == {
+        'login', 'get_members', 'get_scoreboard',
+        'get_playoff_start', 'get_current_season_length',
+    }
 
 
 def test_base_scraper_load_reads_league_id_and_playoff_start():
-    scraper = LeagueScraper(_make_config(playoff_start=7))
+    scraper = _ConcreteScraper(_make_config(playoff_start=7))
     scraper.load()
     assert scraper.league_id == LEAGUE_ID
     assert scraper.playoff_start == 7
@@ -51,14 +76,14 @@ def test_base_scraper_load_reads_league_id_and_playoff_start():
 
 
 def test_base_scraper_load_defaults_playoff_start():
-    scraper = LeagueScraper(_make_config())
+    scraper = _ConcreteScraper(_make_config())
     scraper.load()
     assert scraper.playoff_start == PLAYOFF_START
 
 
 def test_base_scraper_dump_merges_managers_and_playoff_start():
     config = _make_config(members={'owner_a': {'curr_name': 'Old'}})
-    scraper = LeagueScraper(config)
+    scraper = _ConcreteScraper(config)
     scraper.load()
     scraper.playoff_start = 9
     scraper.managers = {'owner_b': {'curr_name': 'New'}}

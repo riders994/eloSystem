@@ -2,8 +2,6 @@ from fantraxapi.objs import ScoringPeriodResult
 
 from typing import Any
 
-import pandas as pd
-
 from ..basics import (
     LeagueBase,
     PLAYOFF_START

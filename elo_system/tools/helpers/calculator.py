@@ -77,9 +77,7 @@ def nfl_calculator(
         overwrite: bool = False,
         k: float = 60,
 ):
-    if scoring in {'default', 'median'}:
-        elo_func = median_elo_calc
-    else:
+    if scoring not in {'default', 'median'}:
         raise ValueError
     if week is None:
         week = score_frame.shape[1] - 1

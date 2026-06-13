@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from elo_system.tools.basics import ROTO_COLS
-from helpers.formatter import fantrax_formatter, roto_calc
+from elo_system.tools.helpers.formatter import fantrax_formatter, roto_calc
 
 from tests.mocks.fantrax import (
     NBA_CATEGORIES,

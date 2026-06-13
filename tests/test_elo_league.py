@@ -9,11 +9,12 @@ objects below expose only the attributes fantrax_formatter touches
 import pandas as pd
 import pytest
 
-import elo_system.elo_system as es_mod
+import elo_system.tools.elo_league as ell_mod
 from elo_system.elo_system import EloLeague, EloSystem
-from helpers.calculator import nba_calculator, nfl_calculator
-from helpers.formatter import fantrax_formatter
-from helpers.frame_manager import FrameManager
+from elo_system.tools.helpers.calculator import nba_calculator, nfl_calculator
+from elo_system.tools.helpers.formatter import fantrax_formatter
+from elo_system.tools.helpers.frame_manager import FrameManager
+from elo_system.tools.helpers import set_calculator, set_formatter
 
 MEMBERS = ['alice', 'bob', 'cara', 'dan']
 K = 60
@@ -127,7 +128,7 @@ def make_league_config():
 @pytest.fixture
 def league(monkeypatch):
     scoreboards = build_scoreboards()
-    monkeypatch.setattr(es_mod, 'FantraxLeague', make_fake_league_cls(scoreboards))
+    monkeypatch.setattr(ell_mod, 'FantraxLeague', make_fake_league_cls(scoreboards))
     el = EloLeague(make_league_config())
     el.load()
     return el
@@ -155,7 +156,6 @@ def test_load_populates_fields(league):
     assert league.is_dynasty is False
     assert league.is_roto is False
     assert league.k == K
-    assert league.osa_factor == 0.4
     assert league.extras == 0
     assert set(league.seasons) == {2024, 2025}
 
@@ -258,33 +258,28 @@ def test_set_current_season_switches_to_unadded_year(league):
 # component selection
 # ---------------------------------------------------------------------------
 
-def test_set_calculator_nba(league):
-    league._set_calculator()
-    assert league.calculator is nba_calculator
+def test_set_calculator_nba():
+    assert set_calculator('nba') is nba_calculator
 
 
-def test_set_calculator_nfl(league):
-    league.league_type = 'nfl'
-    league._set_calculator()
-    assert league.calculator is nfl_calculator
+def test_set_calculator_nfl():
+    assert set_calculator('nfl') is nfl_calculator
 
 
-def test_set_calculator_unknown_raises(league):
-    league.league_type = 'mlb'
+def test_set_calculator_unknown_raises():
     with pytest.raises(ValueError, match='mlb'):
-        league._set_calculator()
+        set_calculator('mlb')
 
 
-def test_set_formatter(league):
-    league._set_formatter()
-    assert league.formatter is fantrax_formatter
+def test_set_formatter_fantrax():
+    assert set_formatter('fantrax') is fantrax_formatter
 
 
-def test_set_formatter_sleeper_currently_unset(league):
-    # Sleeper support is not implemented yet: the formatter stays None.
-    league.platform = 'sleeper'
-    league._set_formatter()
-    assert league.formatter is None
+def test_set_formatter_unknown_raises():
+    # Sleeper support is not implemented yet, so any non-fantrax platform
+    # (including 'sleeper') raises rather than silently returning None.
+    with pytest.raises(ValueError):
+        set_formatter('sleeper')
 
 
 def test_set_frame_manager_idempotent(league):
@@ -507,7 +502,7 @@ def test_publish_payload_shape(league):
 def test_compile_season_stats(league):
     stats = league.compile_season_stats()
     assert stats['playoff_start'][2024] == 2
-    assert stats['season_length'][2025] == 3
+    assert stats['current_season_length'][2025] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +540,7 @@ def test_constructor_loads_config_from_path(tmp_path):
     cfg_path.write_text(yaml.dump(cfg))
 
     es = EloSystem(str(cfg_path))
-    assert isinstance(es, es_mod.EloBase)
+    assert isinstance(es, EloSystem)
     assert es.configs_dir == tmp_path
     # Explicit name from the config is used; the others fall back to defaults.
     assert es.csv_config_loc == 'my_csv.yml'
@@ -570,6 +565,6 @@ def test_constructor_none_bootstraps_directory_skeleton(tmp_path, monkeypatch):
     assert es.configs_dir == tmp_path / 'resources' / 'configs'
     assert es.resources_dir.is_dir()
     assert es.configs_dir.is_dir()
-    # No sys config on disk yet -> empty config, defaults apply.
-    assert es.config == {}
+    # No sys config on disk yet -> defaults apply.
+    assert es.reader_key == 'csv'
     assert es.csv_config_loc == 'csv_config.yml'

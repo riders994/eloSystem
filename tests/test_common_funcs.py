@@ -1,7 +1,6 @@
 """Tests for elo_system.tools.basics.common_funcs."""
 import math
 
-import numpy as np
 import pandas as pd
 import pytest
 

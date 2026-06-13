@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from elo_system.elo_system import EloCSV
-from helpers.frame_manager import FrameManager
+from elo_system.tools.helpers.frame_manager import FrameManager
 
 
 def make_csv(tmp_path, **cfg):

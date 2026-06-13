@@ -2,7 +2,7 @@
 import pandas as pd
 import pytest
 
-from helpers.frame_manager import FrameManager
+from elo_system.tools.helpers.frame_manager import FrameManager
 
 MEMBERS_2024 = ['alice', 'bob', 'cara', 'dan']
 MEMBERS_2025 = ['alice', 'bob', 'cara', 'erin']  # dan leaves, erin joins

@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from typing import Any
 
 from ..basics import LeagueBase, PLAYOFF_START
@@ -5,7 +6,13 @@ from ..basics import LeagueBase, PLAYOFF_START
 import fantraxapi as ft
 
 
-class LeagueScraper(LeagueBase):
+class LeagueScraper(LeagueBase, ABC):
+    """Abstract base for platform scrapers.
+
+    Holds the shared config/state plumbing (league id, managers, playoff
+    start, season length) and defines the interface every platform scraper
+    (e.g. FantraxScraper, a future SleeperScraper) must implement.
+    """
 
     def __init__(self, config: dict) -> None:
         self.league_id = None
@@ -14,8 +21,6 @@ class LeagueScraper(LeagueBase):
         self.playoff_start = PLAYOFF_START
         self.current_season_length = 0
         super().__init__(config)
-
-
 
     def _load(self) -> None:
         super()._load()
@@ -29,13 +34,31 @@ class LeagueScraper(LeagueBase):
             'playoff_start': self.playoff_start
         })
 
-    @staticmethod
-    def get_playoff_start() -> int:
-        return PLAYOFF_START
+    @abstractmethod
+    def login(self):
+        """Connect to the platform and fetch the league wrapper + scoreboards."""
+        raise NotImplementedError
 
-    @staticmethod
-    def get_current_season_length() -> int:
-        return 0
+    @abstractmethod
+    def get_members(self) -> dict[str, Any]:
+        """Return the canonical member map keyed by stable owner id:
+        {owner_id: {'team_id', 'curr_name', 'curr_short', 'commish'}}."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_scoreboard(self, week: int):
+        """Return the scoreboard object for the given week."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_playoff_start(self) -> int:
+        """Return the first playoff week for the loaded season."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_current_season_length(self) -> int:
+        """Return the number of scored periods in the season."""
+        raise NotImplementedError
 
 
 class FantraxScraper(LeagueScraper):
