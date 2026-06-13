@@ -1,5 +1,10 @@
 import pandas as pd
 import numpy as np
+import json
+import yaml
+
+
+from pathlib import Path
 
 
 def elo_share(elo):
@@ -80,3 +85,25 @@ def median_elo_calc(player_scores, player_elos, k=60, proba=False) -> pd.Series:
         pass
     return player_elos + (k * (normed_scores - median) * np.log(1 + winners * (normed_scores - median)) * 2.2 /
             (2.2 + winners * (player_elos - median_elo) / 1000))
+
+def str_to_path(filepath: str) -> Path:
+    return Path(filepath).expanduser().resolve()
+
+def load_config_file(file_path: Path) -> dict:
+    str_path = str(file_path)
+    if '.json' in str_path:
+        with open(file_path, 'r') as f:
+            config = json.load(f)
+    elif '.yml' in str_path:
+        with open(file_path, 'r') as f:
+            config = yaml.safe_load(f)
+    return config
+
+def write_config_file(file_path: Path, config: dict) -> None:
+    str_path = str(file_path)
+    if '.json' in str_path:
+        with open(file_path, 'w') as f:
+            json.dump(config, f)
+    elif '.yml' in str_path:
+        with open(file_path, 'w') as f:
+            yaml.dump(config, f)

@@ -1,10 +1,11 @@
+from pathlib import Path
 from typing import Any
-import time
+
 
 import pandas as pd
 
-from .tools.basics import week_formatter, EloBase
-from .tools import (
+from tools.basics import week_formatter, EloBase, load_config_file, write_config_file, str_to_path
+from tools import (
     League,
     FantraxLeague,
     fantrax_formatter,
@@ -39,14 +40,7 @@ CONFIGS = {
     'sql', 'csv', 'elo', 'league',
 }
 
-class EloData(EloBase):
-    pass
 
-class EloSQL(EloData):
-    pass
-
-class EloCSV(EloData):
-    pass
 
 
 class EloLeague(EloBase):
@@ -341,44 +335,162 @@ class EloLeague(EloBase):
         else:
             return self._run_one(week, year, overwrite)
 
+
+class EloData(EloBase):
+
+    def __init__(
+            self, config: dict
+            # , elo_league: EloLeague
+    ) -> None:
+        super().__init__(config)
+        # self.elo_league = elo_league
+
+
+        self.seasons_by = config.get('seasons_by', 'year')
+        self.dynasty_fstr = config.get('dynasty_fstr', 'dynasty_elo{ext}')
+        self.elo_fstr = config.get('elo_fstr', '{num}_season_elo{ext}')
+        self.roto_fstr = config.get('roto_fstr', '{num}_roto_elo{ext}')
+
+    def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
+        pass
+
+    def _publish_seasonal_elo(self, num:int , frame: pd.DataFrame) -> None:
+        pass
+
+    def _publish_seasonal_elos(self, frames: dict[int, pd.DataFrame]):
+        sorted_keys = sorted(frames)
+        ranks = {k: i for i, k in enumerate(sorted_keys)}
+        for k, v in frames.items():
+            if self.seasons_by == 'year':
+                self._publish_seasonal_elo(k, v)
+            elif self.seasons_by == 'order':
+                self._publish_seasonal_elo(ranks[k], v)
+
+    def _publish_roto(self, num: int, frame: pd.DataFrame) -> None:
+        pass
+
+    def _publish_roto_history(self, frames: dict[str, pd.DataFrame]):
+        sorted_keys = sorted(frames)
+        ranks = {k: i for i, k in enumerate(sorted_keys)}
+        for k, v in frames.items():
+            if self.seasons_by == 'year':
+                self._publish_roto(k, v)
+            elif self.seasons_by == 'order':
+                self._publish_roto(ranks[k], v)
+        pass
+
+    def publish(self, payload: dict[str, Any]) -> None:
+        if (delo := payload.get('dynasty_elo')) is not None:
+            self._publish_dynasty_elo(delo)
+        if (selo := payload.get('seasonal_elo')) is not None:
+            self._publish_seasonal_elos(selo)
+        if (roto := payload.get('roto_history')) is not None:
+            self._publish_roto_history(roto)
+
+
+class EloSQL(EloData):
+    pass
+
+
+class EloCSV(EloData):
+    def __init__(
+            self, config: dict
+            # , elo_league: EloLeague
+            , working_directory: Path
+    ) -> None:
+        super().__init__(
+            config
+            # , elo_league
+        )
+        self.write_loc = config['write_loc']
+        self.read_loc = config.get('read_loc', self.write_loc)
+        self.extension = config.get('extension', '.csv')
+        self.wd = working_directory
+
+    def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
+        file_path = Path(self.wd, self.write_loc ,self.dynasty_fstr.format(ext=self.extension))
+        frame.to_csv(file_path, index=True)
+
+    def _publish_seasonal_elo(self, num: int, frame: pd.DataFrame) -> None:
+        file_path = Path(self.wd, self.write_loc, self.elo_fstr.format(ext=self.extension, num=num))
+        frame.to_csv(file_path, index=True)
+
+    def _publish_roto(self, num: int, frame: pd.DataFrame) -> None:
+        file_path = Path(self.wd, self.write_loc, self.roto_fstr.format(ext=self.extension, num=num))
+        frame.to_csv(file_path, index=True)
+
 class EloSystem(EloBase):
 
-    def __init__(self, config: dict):
+    def __init__(self, config_path: str):
+        self.pathed_config = str_to_path(config_path)
+        config = load_config_file(self.pathed_config)
         super().__init__(config)
-        self.data_config_loc = self.config.get('data_config_loc')
-        self.elo_league_config_loc = self.config.get('elo_league_config_loc')
-        self.wd = None
-        self._set_working_directory()
+        self.configs_dir = self.pathed_config.parent
 
-    def _get_working_directory(self):
-        pass
+        self.csv_config_loc = self.config.get('csv_config_name', 'csv_config.yml')
+        self.elo_league_config_loc = self.config.get('elo_league_config_name', 'elo_config.yml')
+        self.sql_config_loc = self.config.get('sql_config_name', 'sql_config.yml')
 
-    def _set_working_directory(self):
-        self.wd = self._get_working_directory()
+        self.csv_config = dict()
+        self.elo_league_config = dict()
+        self.sql_config = dict()
 
-    def _validate_sql_config(self) -> bool:
-        pass
+        self.elo_league = None
+        self.elo_csv = None
+        self.elo_sql = None
 
-    def read_sql_config(self, config):
-        if self._validate_sql_config():
-            pass
-        pass
+        self.reader = None
+        self.writer = None
 
-    def _validate_csv_config(self) -> bool:
-        pass
+    def _assign_rw(self):
+        rw = {'sql': self.elo_sql, 'csv': self.elo_csv}
 
-    def read_csv_config(self, config):
-        if self._validate_csv_config():
-            pass
-        pass
+        self.reader = rw[self.config['reader']]
+        self.writer = rw[self.config['writer']]
 
-    def _validate_league_config(self) -> bool:
-        pass
+    @staticmethod
+    def _validate_sql_config(config: dict) -> bool:
 
-    def read_league_config(self, config):
-        if self._validate_league_config():
-            pass
-        pass
+        return True
+
+    def read_sql_config(self, config: dict | None) -> None:
+        if config is None:
+            config = load_config_file(Path(self.configs_dir, self.sql_config_loc))
+        if self._validate_sql_config(config):
+            self.sql_config = config
+            # self.elo_sql = EloSQL(self.sql_config)
+
+    @staticmethod
+    def _validate_csv_config(config: dict) -> bool:
+        if config.get('write_loc') is None:
+            return False
+        return True
+
+    def read_csv_config(self, config: dict | None) -> None:
+        if config is None:
+            config = load_config_file(Path(self.configs_dir, self.csv_config_loc))
+        if self._validate_csv_config(config):
+            self.csv_config = config
+            self.elo_csv = EloCSV(self.csv_config, self.configs_dir.parent)
+            self._assign_rw()
+
+    @staticmethod
+    def _validate_league_config(config: dict) -> bool:
+        if config.get('platform') is None:
+            return False
+        if config.get('league_type') is None:
+            return False
+        if config.get('current_sports_year') is None:
+            return False
+        return True
+
+    def read_league_config(self, config: dict | None) -> None:
+        if config is None:
+            config = load_config_file(Path(self.configs_dir, self.elo_league_config_loc))
+        if self._validate_league_config(config):
+            self.elo_league_config = config
+            self.elo_league = EloLeague(self.elo_league_config)
+
 
     def _load_configs(self, configs: dict) -> bool:
         for k, v in configs.items():
@@ -392,18 +504,78 @@ class EloSystem(EloBase):
                 self.read_league_config(v)
         return True
 
-    def _load_objs(self):
-        pass
-
     def load_configs(self, configs: dict | None = None, sql_config: dict | None = None, csv_config: dict | None = None, league_config: dict | None = None) -> bool:
         if isinstance(configs, dict):
             return self._load_configs(configs)
         else:
-            if isinstance(csv_config, dict):
-                self.read_csv_config(csv_config)
-            elif isinstance(sql_config, dict):
-                self.read_sql_config(sql_config)
-            if isinstance(league_config, dict):
-                self.read_league_config(league_config)
+            self.read_csv_config(csv_config)
+            self.read_sql_config(sql_config)
+            self.read_league_config(league_config)
 
         return True
+
+    def write_configs(self, which: str | list[str]) -> None:
+        if isinstance(which, list):
+            for i in which:
+                self.write_configs(i)
+        else:
+            if which == 'sys':
+                write_config_file(self.pathed_config, self.config)
+            elif which == 'csv':
+                write_config_file(Path(self.configs_dir, self.csv_config_loc), self.csv_config)
+            elif which == 'sql':
+                write_config_file(Path(self.configs_dir, self.sql_config_loc), self.sql_config)
+            elif which == 'league':
+                write_config_file(Path(self.configs_dir, self.elo_league_config_loc), self.elo_league_config)
+
+
+    def dump(self) -> dict[str, Any]:
+        res = {'sys': super().dump()}
+        if len(self.elo_league_config):
+            res.update({'league': self.elo_league_config})
+        if len(self.csv_config):
+            res.update({'csv': self.csv_config})
+        if len(self.sql_config):
+            res.update({'sql': self.sql_config})
+        self.write_configs(list(res.keys()))
+
+        return res
+
+    def publish(self):
+        payload = self.elo_league.publish()
+        self.writer.publish(payload)
+
+    def load_frames(self):
+        frames = self.reader.load_frames()
+        self.elo_league.load_frames(frames)
+
+
+if __name__ == '__main__':
+    sys_config_path = './resources/configs/sys_config.yml'
+    ftc24 = {
+        'league_id': 'blk3bn3clw9njuhc'
+    }
+    ftc25 = {
+        'league_id': 'wserh14rmbbpqtcg'
+    }
+
+    sys = EloSystem(sys_config_path)
+    sys.load_configs()
+    mmm = sys.elo_league
+    mmm.load()
+    mmm.add_season(ftc24, 2024, True)
+    mmm.add_season(ftc25, 2025, True)
+    mmm.add_league(2025)
+    mmm.add_league(2024)
+    mmm.dump()
+    mmm.run_prep(2025)
+    mmm.run_prep(2024)
+    mmm.run_season(2025)
+    mmm.run_season(2024)
+
+    mmm.dump()
+
+    mmm.change_dynasty(True)
+
+    sys.publish()
+    print('done')
