@@ -1,4 +1,4 @@
-from .basics import EloBase, ROTO_COLS
+from ..basics import ROTO_COLS
 from fantraxapi.objs import ScoringPeriodResult
 import pandas as pd
 import numpy as np
@@ -39,3 +39,12 @@ def fantrax_formatter(league_type: str, scoreboard: ScoringPeriodResult, roto: b
             return board_df
     else:
         return pd.DataFrame()
+
+
+def set_formatter(platform: str):
+    if platform == 'fantrax':
+        return fantrax_formatter
+    # elif platform == 'sleeper':
+    #     pass
+    else:
+        raise ValueError(f'Unknown platform: {platform}')

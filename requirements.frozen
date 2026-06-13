@@ -1,7 +1,7 @@
 certifi==2026.5.20
 charset-normalizer==3.4.7
-fantraxapi @ git+https://github.com/riders994/FantraxAPI.git@stable
-idna==3.17
+fantraxapi @ git+https://github.com/riders994/FantraxAPI.git@e0b36b24348915748c786dd40531121787e32d3f
+idna==3.18
 numpy==2.4.6
 packaging==25.0
 pandas==3.0.3
@@ -14,6 +14,4 @@ rv_pytools==1.1.1
 setuptools==82.0.1
 six==1.17.0
 sleeper==2.0.0
-sleeper-api-wrapper==1.2.1
-sleeper-py==1.0.1
 urllib3==2.7.0

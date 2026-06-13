@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import elo_system.tools.sql_helpers.helpers as helpers
-from elo_system.tools.sql_helpers.helpers import upsert_dataframe
+import elo_system.tools.helpers.helper_funcs as helpers
+from elo_system.tools.helpers.helper_funcs import upsert_dataframe
 
 
 class FakeCursor:

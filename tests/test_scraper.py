@@ -5,8 +5,8 @@ module's imported name so no test ever touches the network.
 """
 import pytest
 
-from elo_system.tools import scraper as scraper_mod
-from elo_system.tools.scraper import PLAYOFF_START, FantraxScraper, LeagueScraper
+from helpers import scraper as scraper_mod
+from helpers.scraper import PLAYOFF_START, FantraxScraper, LeagueScraper
 
 from tests.mocks.fantrax import (
     make_default_teams,

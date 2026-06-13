@@ -10,7 +10,7 @@ from .common_funcs import (
     write_config_file,
     week_formatter
 )
-from .common_classes import EloBase
+from .common_classes import LeagueBase, DataBase
 
 from .constants import (
     PLAYOFF_START,

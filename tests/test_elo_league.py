@@ -5,16 +5,15 @@ with a local fake); no network access ever happens. The fake scoreboard
 objects below expose only the attributes fantrax_formatter touches
 (matchups -> .home/.away.owners and .home_categories/.away_categories).
 """
-import copy
 
 import pandas as pd
 import pytest
 
 import elo_system.elo_system as es_mod
 from elo_system.elo_system import EloLeague, EloSystem
-from elo_system.tools.calculator import nba_calculator, nfl_calculator
-from elo_system.tools.formatter import fantrax_formatter
-from elo_system.tools.frame_manager import FrameManager
+from helpers.calculator import nba_calculator, nfl_calculator
+from helpers.formatter import fantrax_formatter
+from helpers.frame_manager import FrameManager
 
 MEMBERS = ['alice', 'bob', 'cara', 'dan']
 K = 60

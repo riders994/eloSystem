@@ -1,6 +1,9 @@
+import re
 import psycopg2
-from psycopg2.extras import execute_values
+
 import pandas as pd
+
+from psycopg2.extras import execute_values
 from typing import List
 
 
@@ -75,3 +78,15 @@ def upsert_dataframe(
     conn.commit()
 
     return len(records)
+
+def fstr_matcher(fstr: str, ext: str) -> tuple[str, re.Pattern]:
+    """Turn a filename format string into a glob pattern and a regex that
+    captures the `{num}` field, so written files can be discovered and
+    their season key recovered on load."""
+    glob = fstr.format(num='*', ext=ext)
+    pattern = (
+        re.escape(fstr)
+        .replace(re.escape('{num}'), r'(?P<num>.+?)')
+        .replace(re.escape('{ext}'), re.escape(ext))
+    )
+    return glob, re.compile('^' + pattern + '$')

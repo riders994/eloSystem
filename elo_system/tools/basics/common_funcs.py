@@ -6,6 +6,8 @@ import yaml
 
 from pathlib import Path
 
+from tests.mocks import fantrax
+
 
 def elo_share(elo):
     return np.power(10, elo / 400)

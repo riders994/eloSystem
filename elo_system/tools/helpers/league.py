@@ -4,10 +4,9 @@ from typing import Any
 
 import pandas as pd
 
-from .basics import (
-    EloBase,
-    PLAYOFF_START,
-    WEEK_STR
+from ..basics import (
+    LeagueBase,
+    PLAYOFF_START
 )
 from .scraper import FantraxScraper
 
@@ -15,7 +14,7 @@ APPROVED_DESTINATIONS = {
     'scoreboards', 'seasonal_elo', 'dynsaty_elo', 'roto'
 }
 
-class League(EloBase):
+class League(LeagueBase):
 
     approved_destinations = APPROVED_DESTINATIONS
 

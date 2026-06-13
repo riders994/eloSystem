@@ -1,15 +1,11 @@
-from .basics import (
+from ..basics import (
     median_elo_calc,
     score_elo_calc,
     bin_elo_calc,
     trin_elo_calc,
-    EloBase,
     WEEK_STR
 )
 import pandas as pd
-import numpy as np
-
-from typing import Any
 
 
 def offseason_adjustment(ratings: pd.Series, factor: float = 0.4) -> pd.Series:
@@ -24,8 +20,8 @@ def nba_calculator(
         score_frame: pd.DataFrame,
         week: int | None = None,
         overwrite: bool = False,
-        scoring: str = 'default',
         k: float = 60,
+        scoring: str = 'default',
 ) -> pd.DataFrame:
     if scoring == 'default':
         elo_func = score_elo_calc
@@ -78,9 +74,8 @@ def nfl_calculator(
         score_frame: pd.DataFrame,
         scoring: str = 'default',
         week: int | None = None,
-        osa_factor: float = 0.4,
-        k: float = 60,
         overwrite: bool = False,
+        k: float = 60,
 ):
     if scoring in {'default', 'median'}:
         elo_func = median_elo_calc
@@ -102,3 +97,11 @@ def nfl_calculator(
     elo_frame[this_week] = s_res_elos
 
     return elo_frame
+
+def set_calculator(league_type: str):
+    if league_type == 'nba':
+        return nba_calculator
+    elif league_type == 'nfl':
+        return nfl_calculator
+    else:
+        raise ValueError('Unknown league type: {}'.format(league_type))

@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from elo_system.tools.calculator import (
+from helpers.calculator import (
     offseason_adjustment,
     nba_calculator,
     nfl_calculator,

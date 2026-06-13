@@ -1,11 +1,11 @@
 from typing import Any
 
 import pandas as pd
-from .basics import EloBase, WEEK_STR
+from ..basics import LeagueBase, WEEK_STR
 from .calculator import offseason_adjustment
 
 
-class FrameManager(EloBase):
+class FrameManager(LeagueBase):
     level = 'seasons'
 
     def __init__(self, config: dict[str, Any]):
@@ -105,8 +105,8 @@ class FrameManager(EloBase):
             if not overwrite:
                 if self.dynasty_elo.get(WEEK_STR.format(dynasty_week)) is not None:
                     return None
-            latest_col = f"week_{dynasty_week - 1}"
-            new_col = f"week_{dynasty_week}"
+            latest_col = WEEK_STR.format(dynasty_week - 1)
+            new_col = WEEK_STR.format(dynasty_week)
 
             next_ids = list(self.config[season]['league_members'].keys())
             new_ids = [tid for tid in next_ids if tid not in self.dynasty_elo.index]

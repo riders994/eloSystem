@@ -1,17 +1,11 @@
-import os
 from typing import Any
 
-from .basics import EloBase
-
-from sleeper.api import (
-    get_league, get_users_in_league, get_matchups_for_week
-)
+from ..basics import LeagueBase, PLAYOFF_START
 
 import fantraxapi as ft
 
-PLAYOFF_START = 3
 
-class LeagueScraper(EloBase):
+class LeagueScraper(LeagueBase):
 
     def __init__(self, config: dict) -> None:
         self.league_id = None

@@ -7,9 +7,9 @@ scraper module's imported name -- no network access.
 """
 import pytest
 
-from elo_system.tools import scraper as scraper_mod
-from elo_system.tools.league import FantraxLeague
-from elo_system.tools.scraper import FantraxScraper
+from helpers import scraper as scraper_mod
+from helpers.league import FantraxLeague
+from helpers.scraper import FantraxScraper
 
 from tests.mocks.fantrax import (
     make_default_teams,
