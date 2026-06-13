@@ -101,9 +101,9 @@ def load_config_file(file_path: Path) -> dict:
 
 def write_config_file(file_path: Path, config: dict) -> None:
     str_path = str(file_path)
-    if '.json' in str_path:
+    if str_path.endswith('.json' ):
         with open(file_path, 'w') as f:
             json.dump(config, f)
-    elif '.yml' in str_path:
+    elif str_path.endswith('.yml'):
         with open(file_path, 'w') as f:
             yaml.dump(config, f)

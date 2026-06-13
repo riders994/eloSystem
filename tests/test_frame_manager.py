@@ -326,19 +326,40 @@ def test_publish_includes_roto_when_enabled():
 
 
 # ---------------------------------------------------------------------------
-# load_frame (stub) and _validate_load_frame
+# _load_frame / load_frames and _validate_load_frame
 # ---------------------------------------------------------------------------
 
-def test_load_frame_is_currently_a_noop():
-    # load_frame is an unimplemented stub: it validates and then does nothing,
-    # regardless of whether the frame is valid. Documenting current behavior.
+def test_load_frame_installs_valid_seasonal_frame():
     fm = FrameManager(make_config())
     valid = pd.DataFrame({'week_0': [1500, 1500]}, index=['alice', 'bob'])
-    assert fm.load_frame('seasonal_elo', valid, 2024) is None
+    fm._load_frame('seasonal_elo', valid, 2024)
+    assert 2024 in fm.seasonal_elo
+    pd.testing.assert_frame_equal(fm.seasonal_elo[2024], valid)
+
+
+def test_load_frame_skips_invalid_frame():
+    fm = FrameManager(make_config())
+    invalid = pd.DataFrame({'nope': [1]}, index=['alice'])  # odd rows, no week_0
+    fm._load_frame('seasonal_elo', invalid, 2024)
     assert fm.seasonal_elo == {}
-    invalid = pd.DataFrame({'nope': [1]}, index=['alice'])
-    assert fm.load_frame('seasonal_elo', invalid, 2024) is None
-    assert fm.seasonal_elo == {}
+
+
+def test_load_frame_dispatches_dynasty_and_roto():
+    fm = FrameManager(make_config(is_dynasty=True, is_roto=True))
+    frame = pd.DataFrame({'week_0': [1500, 1500]}, index=['alice', 'bob'])
+    fm._load_frame('dynasty_elo', frame)
+    fm._load_frame('roto_history', frame, 2025)
+    pd.testing.assert_frame_equal(fm.dynasty_elo, frame)
+    assert 2025 in fm.roto_history
+
+
+def test_load_frames_installs_full_payload():
+    fm = FrameManager(make_config(is_dynasty=True))
+    seas = pd.DataFrame({'week_0': [1500, 1500]}, index=['alice', 'bob'])
+    dyn = pd.DataFrame({'week_0': [1500, 1500]}, index=['alice', 'bob'])
+    fm.load_frames({'dynasty_elo': dyn, 'seasonal_elo': {2024: seas}})
+    assert 2024 in fm.seasonal_elo
+    pd.testing.assert_frame_equal(fm.dynasty_elo, dyn)
 
 
 def test_validate_load_frame_accepts_even_rows_with_week_columns():

@@ -2,4 +2,14 @@
 .venv/
 __pycache__/
 *.pyc
-resources/
+
+# Resources: ignore local data/configs, but keep the directory structure,
+# the historical elos/, and tracked *.example.yml config templates.
+resources/*
+!resources/elos/
+!resources/configs/
+!resources/ratings/
+resources/configs/*
+!resources/configs/*.example.yml
+resources/ratings/*
+!resources/ratings/.gitkeep

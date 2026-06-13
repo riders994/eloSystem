@@ -1,0 +1,8 @@
+# SQL backend config. Copy to sql_config.yml and edit.
+# The SQL backend (EloSQL) is not yet implemented; this is a placeholder.
+# host: localhost
+# port: 5432
+# dbname: elo
+# user: elo
+# password: ""
+# schema: public

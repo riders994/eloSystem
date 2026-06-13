@@ -40,6 +40,11 @@ class FrameManager(EloBase):
             frame = self.seasonal_elo[season]
         return frame.get(WEEK_STR.format(w)) is not None
 
+    def _check_full_seasons(self) -> bool:
+        if self.is_dynasty:
+            return False
+        return True
+
     def _check_consecutive_seasons(self) -> bool:
         s = min(list(self.config.keys()))
         l = len(list(self.config.keys()))
@@ -51,14 +56,31 @@ class FrameManager(EloBase):
     def can_dynasty(self) -> bool:
         if not self._check_consecutive_seasons():
             return False
-
+        if not self._check_full_seasons():
+            return False
         return True
 
-    def load_frame(self, destination: str, frame: pd.DataFrame, year: int | None = None) -> None:
+    def _load_frame(self, destination: str, frame: pd.DataFrame, year: int | None = None) -> None:
         if self._validate_load_frame(frame):
-            pass
+            if destination == 'dynasty_elo':
+                self.dynasty_elo = frame
+            elif destination == 'roto_history':
+                self.roto_history.update({year: frame})
+            elif destination == 'seasonal_elo':
+                self.seasonal_elo.update({year: frame})
+
+    def load_frames(self, frames: dict[str | int, Any], label: str | None = None) -> None:
+        if label is None:
+            for k, v in frames.items():
+                if k == 'dynasty_elo':
+                    self._load_frame(k, v)
+                if k in {'roto_history', 'seasonal_elo'}:
+                    for year, frame in v.items():
+                        self._load_frame(k, frame, year)
         else:
-            pass
+            for k, v in frames.items():
+                self._load_frame(label, v, k)
+
 
     def get_current_sports_year(self):
         return max(list(self.config.keys()))

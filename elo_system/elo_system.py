@@ -1,11 +1,12 @@
+import re
 from pathlib import Path
 from typing import Any
 
 
 import pandas as pd
 
-from tools.basics import week_formatter, EloBase, load_config_file, write_config_file, str_to_path
-from tools import (
+from .tools.basics import week_formatter, EloBase, load_config_file, write_config_file, str_to_path
+from .tools import (
     League,
     FantraxLeague,
     fantrax_formatter,
@@ -13,9 +14,6 @@ from tools import (
     nba_calculator,
     nfl_calculator
 )
-import os
-import yaml
-
 
 # FANTRAX_LC = 'fantrax_lc.yml'
 # SLEEPER_LC = 'sleeper_lc.yml'
@@ -39,6 +37,12 @@ import yaml
 CONFIGS = {
     'sql', 'csv', 'elo', 'league',
 }
+
+# Default locations used when EloSystem is constructed without a config path
+# (bootstrap mode): the directory skeleton is created relative to the CWD.
+DEFAULT_RESOURCES_DIR = 'resources'
+DEFAULT_CONFIGS_DIR = 'configs'
+DEFAULT_SYS_CONFIG = 'sys_config.yml'
 
 
 
@@ -180,7 +184,9 @@ class EloLeague(EloBase):
         if isinstance(league_year, int):
             self.leagues.pop(league_year, None)
         elif isinstance(league_year, str):
-            pass
+            for k, v in self.seasons:
+                if v['league_id'] == league_year:
+                    self.leagues.pop(k, None)
 
     def _set_calculator(self) -> None:
         if self.league_type == 'nba':
@@ -326,6 +332,9 @@ class EloLeague(EloBase):
 
         return payload
 
+    def load_frames(self, frames: dict[str, dict]) -> None:
+        self.frame_manager.load_frames(frames)
+
     def run(self, week: int | str, year: int | None = None, overwrite: bool = False, ):
         if year is None:
             year = self.current_sports_year
@@ -340,11 +349,8 @@ class EloData(EloBase):
 
     def __init__(
             self, config: dict
-            # , elo_league: EloLeague
     ) -> None:
         super().__init__(config)
-        # self.elo_league = elo_league
-
 
         self.seasons_by = config.get('seasons_by', 'year')
         self.dynasty_fstr = config.get('dynasty_fstr', 'dynasty_elo{ext}')
@@ -377,7 +383,6 @@ class EloData(EloBase):
                 self._publish_roto(k, v)
             elif self.seasons_by == 'order':
                 self._publish_roto(ranks[k], v)
-        pass
 
     def publish(self, payload: dict[str, Any]) -> None:
         if (delo := payload.get('dynasty_elo')) is not None:
@@ -395,37 +400,118 @@ class EloSQL(EloData):
 class EloCSV(EloData):
     def __init__(
             self, config: dict
-            # , elo_league: EloLeague
             , working_directory: Path
     ) -> None:
         super().__init__(
             config
-            # , elo_league
         )
         self.write_loc = config['write_loc']
         self.read_loc = config.get('read_loc', self.write_loc)
         self.extension = config.get('extension', '.csv')
         self.wd = working_directory
+        # Ensure the ratings (output) directory exists before any publish.
+        self.out_dir = Path(self.wd, self.write_loc)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        # Input directory for load_frames (defaults to the output directory).
+        self.in_dir = Path(self.wd, self.read_loc)
 
     def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
-        file_path = Path(self.wd, self.write_loc ,self.dynasty_fstr.format(ext=self.extension))
+        file_path = Path(self.out_dir, self.dynasty_fstr.format(ext=self.extension))
         frame.to_csv(file_path, index=True)
 
     def _publish_seasonal_elo(self, num: int, frame: pd.DataFrame) -> None:
-        file_path = Path(self.wd, self.write_loc, self.elo_fstr.format(ext=self.extension, num=num))
+        file_path = Path(self.out_dir, self.elo_fstr.format(ext=self.extension, num=num))
         frame.to_csv(file_path, index=True)
 
     def _publish_roto(self, num: int, frame: pd.DataFrame) -> None:
-        file_path = Path(self.wd, self.write_loc, self.roto_fstr.format(ext=self.extension, num=num))
+        file_path = Path(self.out_dir, self.roto_fstr.format(ext=self.extension, num=num))
         frame.to_csv(file_path, index=True)
+
+    @staticmethod
+    def _fstr_matcher(fstr: str, ext: str) -> tuple[str, re.Pattern]:
+        """Turn a filename format string into a glob pattern and a regex that
+        captures the `{num}` field, so written files can be discovered and
+        their season key recovered on load."""
+        glob = fstr.format(num='*', ext=ext)
+        pattern = (
+            re.escape(fstr)
+            .replace(re.escape('{num}'), r'(?P<num>.+?)')
+            .replace(re.escape('{ext}'), re.escape(ext))
+        )
+        return glob, re.compile('^' + pattern + '$')
+
+    def _read_csv(self, file_path: Path) -> pd.DataFrame:
+        # index=True on publish writes the member id index; restore it here.
+        return pd.read_csv(file_path, index_col=0)
+
+    def _load_single(self, fstr: str) -> pd.DataFrame | None:
+        file_path = Path(self.in_dir, fstr.format(ext=self.extension))
+        if not file_path.exists():
+            return None
+        return self._read_csv(file_path)
+
+    def _load_indexed_set(self, fstr: str) -> dict[Any, pd.DataFrame]:
+        # Recovers the per-season key embedded in each filename. Under the
+        # default seasons_by='year' that key is the season year; under
+        # 'order' it is the ordinal the file was written with.
+        glob, matcher = self._fstr_matcher(fstr, self.extension)
+        frames: dict[Any, pd.DataFrame] = {}
+        if not self.in_dir.exists():
+            return frames
+        for file_path in sorted(self.in_dir.glob(glob)):
+            m = matcher.match(file_path.name)
+            if m is None:
+                continue
+            num = m.group('num')
+            key = int(num) if num.lstrip('-').isdigit() else num
+            frames[key] = self._read_csv(file_path)
+        return frames
+
+    def load_frames(self, frame_set: str | list[str] | None = None) -> dict[str, Any]:
+        loaders = {
+            'dynasty_elo': lambda: self._load_single(self.dynasty_fstr),
+            'seasonal_elo': lambda: self._load_indexed_set(self.elo_fstr),
+            'roto_history': lambda: self._load_indexed_set(self.roto_fstr),
+        }
+        if frame_set is None:
+            frame_set = list(loaders.keys())
+        elif isinstance(frame_set, str):
+            frame_set = [frame_set]
+
+        out: dict[str, Any] = {}
+        for fs in frame_set:
+            if fs not in loaders:
+                raise KeyError('Unknown frame set: {}'.format(fs))
+            loaded = loaders[fs]()
+            # Omit sets with no data on disk so FrameManager.load_frames never
+            # has to iterate a missing/None entry.
+            if loaded is not None and (not isinstance(loaded, dict) or loaded):
+                out[fs] = loaded
+        return out
 
 class EloSystem(EloBase):
 
-    def __init__(self, config_path: str):
-        self.pathed_config = str_to_path(config_path)
-        config = load_config_file(self.pathed_config)
+    def __init__(self, config_path: str | None = None):
+        if config_path is None:
+            # Bootstrap mode: no config supplied. Create the resource/config
+            # directory skeleton and start from whatever sys config exists
+            # there (empty config if none yet). The ratings (output) directory
+            # is created later by EloCSV once write_loc is known.
+            self.resources_dir = str_to_path(DEFAULT_RESOURCES_DIR)
+            self.configs_dir = self.resources_dir / DEFAULT_CONFIGS_DIR
+            for directory in (self.resources_dir, self.configs_dir):
+                directory.mkdir(parents=True, exist_ok=True)
+            self.pathed_config = self.configs_dir / DEFAULT_SYS_CONFIG
+            config = load_config_file(self.pathed_config) if self.pathed_config.exists() else dict()
+        else:
+            # A path was supplied: it must point to a valid config file.
+            # load_config_file raises if the path is invalid/missing.
+            self.pathed_config = str_to_path(config_path)
+            config = load_config_file(self.pathed_config)
+            self.configs_dir = self.pathed_config.parent
+            self.resources_dir = self.configs_dir.parent
+
         super().__init__(config)
-        self.configs_dir = self.pathed_config.parent
 
         self.csv_config_loc = self.config.get('csv_config_name', 'csv_config.yml')
         self.elo_league_config_loc = self.config.get('elo_league_config_name', 'elo_config.yml')
@@ -459,6 +545,7 @@ class EloSystem(EloBase):
         if self._validate_sql_config(config):
             self.sql_config = config
             # self.elo_sql = EloSQL(self.sql_config)
+            self._assign_rw()
 
     @staticmethod
     def _validate_csv_config(config: dict) -> bool:
@@ -531,12 +618,15 @@ class EloSystem(EloBase):
 
     def dump(self) -> dict[str, Any]:
         res = {'sys': super().dump()}
-        if len(self.elo_league_config):
-            res.update({'league': self.elo_league_config})
-        if len(self.csv_config):
-            res.update({'csv': self.csv_config})
-        if len(self.sql_config):
-            res.update({'sql': self.sql_config})
+        if self.elo_league_config is not None:
+            if len(self.elo_league_config):
+                res.update({'league': self.elo_league_config})
+        if self.csv_config is not None:
+            if len(self.csv_config):
+                res.update({'csv': self.csv_config})
+        if self.sql_config is not None:
+            if len(self.sql_config):
+                res.update({'sql': self.sql_config})
         self.write_configs(list(res.keys()))
 
         return res
@@ -545,8 +635,8 @@ class EloSystem(EloBase):
         payload = self.elo_league.publish()
         self.writer.publish(payload)
 
-    def load_frames(self):
-        frames = self.reader.load_frames()
+    def load_frames(self, frame_set: str | list[str] | None) -> None:
+        frames = self.reader.load_frames(frame_set)
         self.elo_league.load_frames(frames)
 
 

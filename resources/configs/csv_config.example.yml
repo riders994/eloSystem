@@ -1,0 +1,7 @@
+# CSV backend config. Copy to csv_config.yml and edit.
+# Output directory for Elo CSVs, relative to the resources/ directory.
+write_loc: ratings
+
+# Optional:
+# read_loc: ratings      # defaults to write_loc
+# extension: .csv        # output file extension

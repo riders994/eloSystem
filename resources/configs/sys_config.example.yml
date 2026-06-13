@@ -1,0 +1,9 @@
+# EloSystem top-level config. Copy to sys_config.yml and edit.
+# Selects which backend reads/writes Elo frames ('csv' or 'sql').
+reader: csv
+writer: csv
+
+# Optional overrides for the sibling config filenames (defaults shown):
+# csv_config_name: csv_config.yml
+# elo_league_config_name: elo_config.yml
+# sql_config_name: sql_config.yml

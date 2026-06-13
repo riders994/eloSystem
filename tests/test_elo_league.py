@@ -1,4 +1,4 @@
-"""Tests for elo_system.elo_system.EloLeague and the EloSystem stub.
+"""Tests for elo_system.elo_system.EloLeague and EloSystem.
 
 The scraper / league layer is fully monkeypatched (FantraxLeague is replaced
 with a local fake); no network access ever happens. The fake scoreboard
@@ -512,23 +512,65 @@ def test_compile_season_stats(league):
 
 
 # ---------------------------------------------------------------------------
-# EloSystem stub
+# EloSystem
 # ---------------------------------------------------------------------------
+#
+# EloSystem is under active development; the reader/writer/publish surface is
+# still churning, so these tests cover only the parts with a settled contract:
+# the pure config validators and the path-loading constructor.
 
-def test_elo_system_is_a_stub():
-    # EloSystem is currently an unimplemented placeholder: its validators and
-    # readers are pass-through stubs returning None. This smoke test documents
-    # that state without pinning the exact (still-evolving) method surface.
-    # (Passing a config dict works for both the no-arg and the
-    # required-config flavors of the constructor.)
-    es = EloSystem({})
+def test_validate_csv_config_requires_write_loc():
+    assert EloSystem._validate_csv_config({'write_loc': 'out'}) is True
+    assert EloSystem._validate_csv_config({}) is False
+
+
+def test_validate_league_config_requires_core_keys():
+    valid = {'platform': 'fantrax', 'league_type': 'nba',
+             'current_sports_year': 2024}
+    assert EloSystem._validate_league_config(valid) is True
+    for missing in ('platform', 'league_type', 'current_sports_year'):
+        partial = dict(valid)
+        del partial[missing]
+        assert EloSystem._validate_league_config(partial) is False
+
+
+def test_validate_sql_config_currently_permissive():
+    # SQL validation is a placeholder that accepts anything for now.
+    assert EloSystem._validate_sql_config({}) is True
+
+
+def test_constructor_loads_config_from_path(tmp_path):
+    import yaml
+    cfg = {'csv_config_name': 'my_csv.yml'}
+    cfg_path = tmp_path / 'sys_config.yml'
+    cfg_path.write_text(yaml.dump(cfg))
+
+    es = EloSystem(str(cfg_path))
     assert isinstance(es, es_mod.EloBase)
-    for name in ('_validate_sql_config', '_validate_csv_config',
-                 '_validate_league_config'):
-        method = getattr(es, name, None)
-        if method is not None:
-            assert method() is None, f'{name} is expected to be a stub'
-    for name in ('read_sql_config', 'read_csv_config', 'read_league_config'):
-        method = getattr(es, name, None)
-        if method is not None:
-            assert method({}) is None, f'{name} is expected to be a stub'
+    assert es.configs_dir == tmp_path
+    # Explicit name from the config is used; the others fall back to defaults.
+    assert es.csv_config_loc == 'my_csv.yml'
+    assert es.sql_config_loc == 'sql_config.yml'
+    assert es.elo_league_config_loc == 'elo_config.yml'
+
+
+def test_constructor_with_path_does_not_create_dirs_and_errors_if_invalid(tmp_path):
+    # A supplied-but-invalid path must raise, not silently bootstrap dirs.
+    missing = tmp_path / 'nope' / 'sys_config.yml'
+    with pytest.raises(FileNotFoundError):
+        EloSystem(str(missing))
+    assert not missing.parent.exists()
+
+
+def test_constructor_none_bootstraps_directory_skeleton(tmp_path, monkeypatch):
+    # With no config path, EloSystem creates resources/ and resources/configs/
+    # relative to the CWD and starts from an empty config.
+    monkeypatch.chdir(tmp_path)
+    es = EloSystem()
+    assert es.resources_dir == tmp_path / 'resources'
+    assert es.configs_dir == tmp_path / 'resources' / 'configs'
+    assert es.resources_dir.is_dir()
+    assert es.configs_dir.is_dir()
+    # No sys config on disk yet -> empty config, defaults apply.
+    assert es.config == {}
+    assert es.csv_config_loc == 'csv_config.yml'
