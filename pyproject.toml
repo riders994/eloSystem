@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elo-system"
+version = "1.0.0"
+description = "Elo rating system for fantasy sports leagues (Fantrax NBA, with multi-season dynasty support)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Rohan V", email = "r.vahalia@gmail.com" }]
+keywords = ["elo", "fantasy", "sports", "fantrax", "sleeper", "rating"]
+urls.Repository = "https://github.com/riders994/eloSystem"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+    # The fantraxapi dependency is a git fork, so this is not PyPI-uploadable.
+    "Private :: Do Not Upload",
+]
+
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "PyYAML>=6.0",
+    "psycopg2-binary>=2.9",
+    # The PyPI release of fantraxapi is broken for H2H-rotisserie leagues;
+    # this fork fixes matchup parsing, playoff handling, and cross-season
+    # team identity. See requirements.frozen for the exact pinned commit.
+    "fantraxapi @ git+https://github.com/riders994/FantraxAPI.git@stable",
+]
+
+[project.optional-dependencies]
+# Planned Sleeper backend (not yet wired into the scraper layer).
+sleeper = ["sleeper>=2.0"]
+dev = [
+    "pytest>=8",
+    "pytest-mock>=3",
+    "pyflakes>=3",
+    "build>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["elo_system*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
