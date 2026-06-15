@@ -1,6 +1,7 @@
 certifi==2026.5.20
 charset-normalizer==3.4.7
-fantraxapi @ git+https://github.com/riders994/FantraxAPI.git@e0b36b24348915748c786dd40531121787e32d3f
+# fantraxapi is no longer a dependency: the fork is vendored at
+# elo_system/_vendor/fantraxapi (pinned to commit ee81bea, @stable v1.0.1).
 idna==3.18
 numpy==2.4.6
 packaging==25.0

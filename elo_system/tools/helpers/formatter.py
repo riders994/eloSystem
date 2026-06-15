@@ -1,5 +1,5 @@
 from ..basics import ROTO_COLS
-from fantraxapi.objs import ScoringPeriodResult
+from elo_system._vendor.fantraxapi.objs import ScoringPeriodResult
 import pandas as pd
 import numpy as np
 

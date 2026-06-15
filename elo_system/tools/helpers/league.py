@@ -1,4 +1,4 @@
-from fantraxapi.objs import ScoringPeriodResult
+from elo_system._vendor.fantraxapi.objs import ScoringPeriodResult
 
 from typing import Any
 

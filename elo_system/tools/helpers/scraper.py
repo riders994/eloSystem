@@ -3,7 +3,7 @@ from typing import Any
 
 from ..basics import LeagueBase, PLAYOFF_START
 
-import fantraxapi as ft
+from elo_system._vendor import fantraxapi as ft
 
 
 class LeagueScraper(LeagueBase, ABC):
