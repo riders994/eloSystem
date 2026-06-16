@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from elo_system.tools.basics import ROTO_COLS
+from elo_system.tools.basics import ROTO_SCORING
 from elo_system.tools.helpers.formatter import fantrax_formatter, roto_calc
 
 from tests.mocks.fantrax import (
@@ -173,7 +173,7 @@ def test_roto_calc_rank_one_is_best(small_cat_frame):
 def test_roto_calc_total_points_conserved(small_cat_frame):
     # 9 categories, each handing out ranks 1+2+3 = 6 -> 54 total.
     result = roto_calc(small_cat_frame)
-    assert result['roto'].sum() == len(ROTO_COLS) * 6
+    assert result['roto'].sum() == len(ROTO_SCORING) * 6
 
 
 def test_roto_calc_mutates_and_returns_same_frame(small_cat_frame):
@@ -187,11 +187,11 @@ def test_roto_calc_matches_independent_pandas_ranking():
     # tie-free frame.
     rng = np.random.default_rng(42)
     n = 8
-    data = {col: rng.permutation(n) * 7 + 3 for col in ROTO_COLS}
+    data = {col: rng.permutation(n) * 7 + 3 for col in ROTO_SCORING}
     frame = pd.DataFrame(data, index=[f't{i}' for i in range(n)]).astype(float)
 
     expected = sum(
-        frame[col].rank(ascending=(col != 'TO')) for col in ROTO_COLS
+        frame[col].rank(ascending=(col != 'TO')) for col in ROTO_SCORING
     )
     result = roto_calc(frame.copy())
     assert (result['roto'] == expected.astype(int)).all()

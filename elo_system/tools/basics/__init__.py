@@ -19,6 +19,7 @@ from .constants import (
     ELO_DIMS,
     PLAYOFF_START,
     ROTO_COLS,
+    ROTO_SCORING,
     WEEK_STR
 )
 

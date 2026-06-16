@@ -170,8 +170,13 @@ def test_missing_match_column_raises(conn, calls):
     assert calls == []
 
 
-def test_all_columns_in_match_columns_raises(conn, calls):
+def test_all_columns_in_match_columns_does_nothing(conn, calls):
+    # When every column is a match column there is nothing to update, so the
+    # generated SQL uses ON CONFLICT ... DO NOTHING rather than raising.
     df = pd.DataFrame({'id': [1], 'week': [2]})
-    with pytest.raises(ValueError, match='nothing to update'):
-        upsert_dataframe(conn, df, 'ratings', ['id', 'week'])
-    assert calls == []
+    count = upsert_dataframe(conn, df, 'ratings', ['id', 'week'])
+    assert count == 1
+    sql = norm(calls[0]['sql'])
+    assert 'ON CONFLICT ("id", "week")' in sql
+    assert 'DO NOTHING' in sql
+    assert 'DO UPDATE' not in sql

@@ -34,5 +34,5 @@ ROTO_COLS = [
     'manager_id',
     'manager_name',
     'week',
-    'roto'
+    'score'
 ]

@@ -64,7 +64,11 @@ class EloSQL(DataBase):
         if not overwrite:
             if dim in self.dim_tables:
                 return True
-        self.dim_tables.update({dim: pd.read_sql_table(f'dim_{dim}', self.conn, schema=self.schema, index_col=f'{dim}_id')})
+        # read_sql_table requires a SQLAlchemy connectable; self.conn is a raw
+        # psycopg2 connection, so query explicitly like the load methods do.
+        self.dim_tables.update({dim: pd.read_sql_query(
+            f'SELECT * FROM {self.schema}.dim_{dim}', self.conn, index_col=f'{dim}_id'
+        )})
         return True
 
     def pull_dims(self, which: str | set[str] | None = None, overwrite: bool = False) -> bool:
@@ -82,8 +86,11 @@ class EloSQL(DataBase):
 
     def _elo_publish_prep(self) -> None:
         dim_on = ['platform_team_id', 'league_year']
-        deduped_man = self.dim_tables['manager'].sort_index().drop_duplicates(subset='discord_id', keep='last')
-        deduped_man_teams = self.dim_tables['team'].sort_index().drop_duplicates(subset=dim_on, keep='last').merge(
+        # manager_id / team_id are the numeric indexes of their dim tables;
+        # reset them to columns so the on= merges resolve and both ids survive
+        # into the final ELO_COLS selection. (Stored dims keep their index.)
+        deduped_man = self.dim_tables['manager'].reset_index().sort_values('manager_id').drop_duplicates(subset='discord_id', keep='last')
+        deduped_man_teams = self.dim_tables['team'].reset_index().sort_values('team_id').drop_duplicates(subset=dim_on, keep='last').merge(
             deduped_man,
             on='manager_id',
             how='inner'
@@ -151,10 +158,13 @@ class EloSQL(DataBase):
         )
 
     def _load_post_proc(self, frame: pd.DataFrame) -> pd.DataFrame:
+        # team_id is the numeric index of dim_tables['team'], so join the
+        # frame's team_id column against that index rather than on='team_id'.
         return frame.merge(
             self.dim_tables['team'],
-            'inner',
-            'team_id'
+            how='inner',
+            left_on='team_id',
+            right_index=True,
         ).rename(columns={'platform_team_id': 'member'})[['member', 'week', 'rating']]
 
     def _load_dynasty(self, league_id: int) -> pd.DataFrame | None:

@@ -2,10 +2,9 @@
 
 Asserts the public names exist with their intended types and values.
 
-NOTE: constants.py defines ``ROTO_COLS`` twice -- first as a set of roto
-category abbreviations, then (lower in the file) as a list of fact-table
-column names. The second definition shadows the first, so the set of
-category abbreviations is unreachable. See test_roto_cols_collision below.
+``ROTO_SCORING`` is the set of NBA roto category abbreviations (used by
+formatter.roto_calc); ``ROTO_COLS`` is the list of fact-table column names
+(used by elo_data.EloSQL). They are distinct names with distinct purposes.
 """
 import elo_system.tools.basics.constants as constants
 
@@ -51,16 +50,15 @@ def test_roto_cols_is_the_column_list():
         'manager_id',
         'manager_name',
         'week',
-        'roto',
+        'score',
     ]
 
 
-def test_roto_cols_collision():
-    """ROTO_COLS is defined twice; the category-abbreviation set is lost.
-
-    This documents the name collision flagged in the module docstring. The
-    list shadows the earlier set, so the abbreviations ('FG%', 'PTS', ...)
-    are not accessible under ROTO_COLS.
-    """
-    assert not isinstance(constants.ROTO_COLS, set)
+def test_roto_scoring_is_the_category_set():
+    # The roto category abbreviations live under ROTO_SCORING, kept distinct
+    # from the ROTO_COLS column list (formerly a name collision).
+    assert isinstance(constants.ROTO_SCORING, set)
+    assert constants.ROTO_SCORING == {
+        'FG%', 'FT%', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO'
+    }
     assert 'FG%' not in constants.ROTO_COLS

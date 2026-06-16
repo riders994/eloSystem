@@ -1,13 +1,13 @@
 import numpy as np
 import pandas as pd
 
-from ..basics import ROTO_COLS
+from ..basics import ROTO_SCORING
 from elo_system._vendor.fantraxapi.objs import ScoringPeriodResult
 
 
 def roto_calc(scoreboard: pd.DataFrame) -> pd.DataFrame:
     stats = []
-    for col in ROTO_COLS:
+    for col in ROTO_SCORING:
         array = scoreboard[col].values
         temp = array.argsort()
         ranks = np.empty_like(temp)
