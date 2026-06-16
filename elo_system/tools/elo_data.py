@@ -11,7 +11,7 @@ from .basics import (
     ELO_COLS,
     LOAD_ELO,
     LOAD_ROTO,
-    ROTO_COLS
+    ROTO_DB_COLS
 )
 from .helpers import (
     fstr_matcher,
@@ -119,7 +119,7 @@ class EloSQL(DataBase):
     def _roto_frame_prep(self):
         self.current_frame.rename(columns={'rating': 'score'}, inplace=True)
 
-        self.current_frame = self.current_frame[ROTO_COLS]
+        self.current_frame = self.current_frame[ROTO_DB_COLS]
 
     def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
         self.current_frame = score_pivot(frame).rename(columns={'rating': 'elo', 'member': 'platform_team_id'})

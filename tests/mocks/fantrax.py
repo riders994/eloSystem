@@ -23,7 +23,7 @@ reuse these factories without dragging in network-backed fixtures.
 from types import SimpleNamespace
 
 #: The 9 NBA category short-names elo_system's roto logic expects
-#: (matches elo_system.tools.basics.constants.ROTO_SCORING).
+#: (matches elo_system.tools.basics.constants.ROTO_COLS).
 NBA_CATEGORIES = ('FG%', 'FT%', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO')
 
 _DEFAULT_STATS = {

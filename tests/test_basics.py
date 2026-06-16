@@ -217,9 +217,9 @@ def test_playoff_start():
     assert constants.PLAYOFF_START == 3
 
 
-def test_roto_scoring():
-    assert isinstance(constants.ROTO_SCORING, set)
-    assert constants.ROTO_SCORING == {
+def test_roto_cols():
+    assert isinstance(constants.ROTO_COLS, set)
+    assert constants.ROTO_COLS == {
         'FG%', 'FT%', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO'
     }
-    assert len(constants.ROTO_SCORING) == 9
+    assert len(constants.ROTO_COLS) == 9
