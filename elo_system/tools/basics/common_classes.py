@@ -1,7 +1,8 @@
-from typing import Any
 import time
 
 import pandas as pd
+
+from typing import Any
 
 
 class LeagueBase:

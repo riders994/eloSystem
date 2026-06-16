@@ -1,3 +1,5 @@
+import pandas as pd
+
 from typing import Any
 
 from .basics.common_classes import LeagueBase
@@ -9,9 +11,6 @@ from .helpers import (
     set_formatter,
     set_calculator
 )
-
-
-import pandas as pd
 
 
 class EloLeague(LeagueBase):

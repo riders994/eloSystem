@@ -1,9 +1,9 @@
-from abc import ABC, abstractmethod
 from typing import Any
+from abc import ABC, abstractmethod
 
 from ..basics import LeagueBase, PLAYOFF_START
-
 from elo_system._vendor import fantraxapi as ft
+
 
 
 class LeagueScraper(LeagueBase, ABC):

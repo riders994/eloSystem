@@ -1,8 +1,8 @@
-from pathlib import Path
 from typing import Any
+from pathlib import Path
 
+from .tools import EloLeague, EloCSV, EloSQL
 from .tools.basics import load_config_file, write_config_file, str_to_path
-from .tools import EloLeague, EloCSV
 
 # FANTRAX_LC = 'fantrax_lc.yml'
 # SLEEPER_LC = 'sleeper_lc.yml'
@@ -192,10 +192,19 @@ class EloSystem:
 
         return res
 
+    def toggle_reader(self):
+        pass
+
+    def toggle_writer(self):
+        pass
+
     def publish(self):
         payload = self.elo_league.publish()
         self.writer.publish(payload)
 
     def load_frames(self, frame_set: str | list[str] | None) -> None:
-        frames = self.reader.load_frames(frame_set)
+        if isinstance(self.reader, EloCSV):
+            frames = self.reader.load_frames(frame_set)
+        elif isinstance(self.reader, EloSQL):
+            frames = self.reader.load_frames(frame_set)
         self.elo_league.load_frames(frames)

@@ -1,12 +1,11 @@
-from elo_system._vendor.fantraxapi.objs import ScoringPeriodResult
-
 from typing import Any
 
+from .scraper import FantraxScraper
+from elo_system._vendor.fantraxapi.objs import ScoringPeriodResult
 from ..basics import (
     LeagueBase,
     PLAYOFF_START
 )
-from .scraper import FantraxScraper
 
 APPROVED_DESTINATIONS = {
     'scoreboards', 'seasonal_elo', 'dynsaty_elo', 'roto'

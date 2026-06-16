@@ -1,3 +1,5 @@
+from .common_classes import LeagueBase, DataBase
+
 from .common_funcs import (
     elo_share,
     elo_expected,
@@ -10,10 +12,14 @@ from .common_funcs import (
     write_config_file,
     week_formatter
 )
-from .common_classes import LeagueBase, DataBase
 
 from .constants import (
+    APPROVED_SQL_FLAVORS,
+    ELO_COLS,
+    ELO_DIMS,
     PLAYOFF_START,
     ROTO_COLS,
     WEEK_STR
 )
+
+from .queries import LOAD_ELO, LOAD_ROTO

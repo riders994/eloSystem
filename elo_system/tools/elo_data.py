@@ -1,13 +1,235 @@
-from .helpers import fstr_matcher
-from .basics.common_classes import DataBase
-from pathlib import Path
-from typing import Any
-
 import pandas as pd
+import psycopg2
+
+from typing import Any
+from pathlib import Path
+from rv_pytools.sqltools import connect
+
+from .basics import (
+    DataBase,
+    ELO_DIMS,
+    ELO_COLS,
+    LOAD_ELO,
+    LOAD_ROTO,
+    ROTO_COLS
+)
+from .helpers import (
+    fstr_matcher,
+    score_pivot,
+    score_unpivot,
+    upsert_dataframe,
+    uri_to_dict,
+    validate_conn_dict
+)
 
 
 class EloSQL(DataBase):
-    pass
+
+    def __init__(
+            self,
+            config: dict,
+            connector: psycopg2.extensions.connection | None = None,
+    ) -> None:
+        super().__init__(
+            config
+        )
+
+        if isinstance((conn_dict:= config.get('conn_dict')), dict):
+            pass
+        else:
+            if isinstance((conn_uri := config.get('conn_uri')), str):
+                conn_dict = uri_to_dict(conn_uri)
+            else:
+                raise KeyError('No connection details supplied.')
+        if validate_conn_dict(conn_dict):
+            self.conn_dict = conn_dict
+        if connector is None:
+            self.conn = connect(self.conn_dict)
+        else:
+            self.conn = connector
+
+        self.schema = self.conn_dict.get('schema', config.get('schema', 'fantasy_sports'))
+        self.load_dict = {
+            'schema': self.schema,
+            'year_end': ''
+        }
+        self.dim_tables: dict[str, pd.DataFrame] = {}
+        self.reset_dims()
+
+        self.curr_league_config: dict[str, Any] = dict()
+
+        self.current_frame = pd.DataFrame()
+
+    def _pull_dim(self, dim: str, overwrite: bool) -> bool:
+        if not overwrite:
+            if dim in self.dim_tables:
+                return True
+        self.dim_tables.update({dim: pd.read_sql_table(f'dim_{dim}', self.conn, schema=self.schema, index_col=f'{dim}_id')})
+        return True
+
+    def pull_dims(self, which: str | set[str] | None = None, overwrite: bool = False) -> bool:
+        if isinstance(which, str):
+            return self._pull_dim(which, overwrite)
+        else:
+            if which is None:
+                which = ELO_DIMS
+            for each in which:
+                self._pull_dim(each, overwrite)
+            return True
+
+    def reset_dims(self) -> bool:
+        return self.pull_dims(overwrite=True)
+
+    def _elo_publish_prep(self) -> None:
+        dim_on = ['platform_team_id', 'league_year']
+        deduped_man = self.dim_tables['manager'].sort_index().drop_duplicates(subset='discord_id', keep='last')
+        deduped_man_teams = self.dim_tables['team'].sort_index().drop_duplicates(subset=dim_on, keep='last').merge(
+            deduped_man,
+            on='manager_id',
+            how='inner'
+        ).rename({'player_name': 'manager_name'})
+
+        d = self.curr_league_config['is_dynasty']
+        self.current_frame['is_dynasty'] = d
+        if d:
+            self._set_dynasty_season()
+
+        # Inner join on the two columns with different names
+        self.current_frame = self.current_frame.merge(
+            deduped_man_teams,
+            on=dim_on,
+            how='inner'
+        )[ELO_COLS]
+
+    def _set_dynasty_season(self) -> pd.DataFrame:
+        seasons = self.curr_league_config['seasons']
+        seas_col = list()
+        for year, season in seasons.items():
+            csl = season['current_season_length'] + 1
+            seas_col += [year] * csl
+        self.current_frame['league_year'] = self.current_frame['week'].map({i: v for i, v in enumerate(seas_col)})
+
+    def _roto_frame_prep(self):
+        self.current_frame.rename(columns={'rating': 'score'}, inplace=True)
+
+        self.current_frame = self.current_frame[ROTO_COLS]
+
+    def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
+        self.current_frame = score_pivot(frame).rename(columns={'rating': 'elo', 'member': 'platform_team_id'}, inplace=True)
+        self._elo_publish_prep()
+        cols = list(self.current_frame.columns)
+        cols.pop()
+        upsert_dataframe(
+            self.conn,
+            self.current_frame,
+            'fact_elos',
+            cols,
+            self.schema
+        )
+
+    def _publish_indexed_frame(self, destination: str, num: int, frame: pd.DataFrame) -> None:
+        self.current_frame = score_pivot(frame)
+        frame['league_year'] = num
+        if destination == 'seasonal_elo':
+            self._elo_publish_prep()
+
+            table = destination.split('_')[1]
+        elif destination == 'roto_history':
+            self._roto_frame_prep()
+
+            table = destination.split('_')[0]
+        else:
+            raise KeyError('Unknown destination: {}'.format(destination))
+        cols = list(self.current_frame.columns)
+        cols.pop()
+        upsert_dataframe(
+            self.conn,
+            self.current_frame,
+            f'fact_{table}s',
+            cols,
+            self.schema
+        )
+
+    def _load_post_proc(self, frame: pd.DataFrame) -> pd.DataFrame:
+        return frame.merge(
+            self.dim_tables['team'],
+            'inner',
+            'team_id'
+        ).rename({'platform_team_id': 'member'})[['member', 'week', 'rating']]
+
+    def _load_dynasty(self, league_id: int) -> pd.DataFrame | None:
+        self.load_dict.update({
+            'is_dynasty': 'TRUE',
+            'league_id': league_id
+        })
+        dynasty_df = pd.read_sql_query(
+            LOAD_ELO.format(self.load_dict),
+            self.conn,
+        )
+        return score_unpivot(self._load_post_proc(dynasty_df))
+
+    def _lookup_league_years(self, league_id: int) -> set[int]:
+        dim = self.dim_tables['league']
+        mask = dim['league_id'] == league_id
+        return set(dim['league_year'][mask])
+
+    def _load_indexed_set(self, league_id: int, destination: str) -> dict[Any, pd.DataFrame]:
+        # Recovers the per-season key embedded in each filename. Under the
+        # default seasons_by='year' that key is the season year; under
+        # 'order' it is the ordinal the file was written with.
+        frames: dict[Any, pd.DataFrame] = {}
+        years = self._lookup_league_years(league_id)
+        self.load_dict.update({
+            'is_dynasty': 'FALSE',
+            'league_id': league_id
+        })
+        if destination == 'seasonal_elo':
+            query = LOAD_ELO
+        elif destination == 'roto_history':
+            query = LOAD_ROTO
+
+        for year in years:
+            year_end = f'AND league_year = {year}'
+            self.load_dict.update({'year_end': year_end})
+            frame = pd.read_sql_query(
+                query.format(self.load_dict),
+                self.conn,
+            )
+            frames[year] = score_unpivot(self._load_post_proc(frame))
+        return frames
+
+    def _lookup_league_id(self, platform_id: str) -> int:
+        dim = self.dim_tables['league']
+        mask = dim['platform_league_id'] == platform_id
+        return dim['league_id'][mask][0]
+
+    def load_frames(self, platform_id: str, frame_set: str | list[str] | None = None) -> dict[str, Any]:
+        loaders = {
+            'dynasty_elo': self._load_dynasty,
+            'seasonal_elo': self._load_indexed_set,
+            'roto_history': self._load_indexed_set,
+        }
+        if frame_set is None:
+            frame_set = list(loaders.keys())
+        elif isinstance(frame_set, str):
+            frame_set = [frame_set]
+
+        league_id = self._lookup_league_id(platform_id)
+
+        out: dict[str, Any] = {}
+        for fs in frame_set:
+            if fs not in loaders:
+                raise KeyError('Unknown frame set: {}'.format(fs))
+            loaded = loaders[fs](league_id)
+            # Omit sets with no data on disk so FrameManager.load_frames never
+            # has to iterate a missing/None entry.
+            if loaded is not None and (not isinstance(loaded, dict) or loaded):
+                out[fs] = loaded
+        return out
+
+    def publish(self, payload: dict[str, Any]) -> None:
+        self.curr_league_config = payload['config']
+        super().publish(payload)
 
 
 class EloCSV(DataBase):

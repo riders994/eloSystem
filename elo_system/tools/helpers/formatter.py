@@ -1,7 +1,8 @@
+import numpy as np
+import pandas as pd
+
 from ..basics import ROTO_COLS
 from elo_system._vendor.fantraxapi.objs import ScoringPeriodResult
-import pandas as pd
-import numpy as np
 
 
 def roto_calc(scoreboard: pd.DataFrame) -> pd.DataFrame:

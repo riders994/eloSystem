@@ -1,3 +1,5 @@
+import pandas as pd
+
 from ..basics import (
     median_elo_calc,
     score_elo_calc,
@@ -5,7 +7,6 @@ from ..basics import (
     trin_elo_calc,
     WEEK_STR
 )
-import pandas as pd
 
 
 def offseason_adjustment(ratings: pd.Series, factor: float = 0.4) -> pd.Series:

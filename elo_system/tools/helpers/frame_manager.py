@@ -1,6 +1,7 @@
+import pandas as pd
+
 from typing import Any
 
-import pandas as pd
 from ..basics import LeagueBase, WEEK_STR
 from .calculator import offseason_adjustment
 
