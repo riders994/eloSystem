@@ -87,7 +87,7 @@ class EloSQL(DataBase):
             deduped_man,
             on='manager_id',
             how='inner'
-        ).rename({'player_name': 'manager_name'})
+        ).rename(columns={'player_name': 'manager_name'})
 
         d = self.curr_league_config['is_dynasty']
         self.current_frame['is_dynasty'] = d
@@ -115,7 +115,7 @@ class EloSQL(DataBase):
         self.current_frame = self.current_frame[ROTO_COLS]
 
     def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
-        self.current_frame = score_pivot(frame).rename(columns={'rating': 'elo', 'member': 'platform_team_id'}, inplace=True)
+        self.current_frame = score_pivot(frame).rename(columns={'rating': 'elo', 'member': 'platform_team_id'})
         self._elo_publish_prep()
         cols = list(self.current_frame.columns)
         cols.pop()
@@ -129,7 +129,7 @@ class EloSQL(DataBase):
 
     def _publish_indexed_frame(self, destination: str, num: int, frame: pd.DataFrame) -> None:
         self.current_frame = score_pivot(frame)
-        frame['league_year'] = num
+        self.current_frame['league_year'] = num
         if destination == 'seasonal_elo':
             self._elo_publish_prep()
 
@@ -155,7 +155,7 @@ class EloSQL(DataBase):
             self.dim_tables['team'],
             'inner',
             'team_id'
-        ).rename({'platform_team_id': 'member'})[['member', 'week', 'rating']]
+        ).rename(columns={'platform_team_id': 'member'})[['member', 'week', 'rating']]
 
     def _load_dynasty(self, league_id: int) -> pd.DataFrame | None:
         self.load_dict.update({
@@ -163,7 +163,7 @@ class EloSQL(DataBase):
             'league_id': league_id
         })
         dynasty_df = pd.read_sql_query(
-            LOAD_ELO.format(self.load_dict),
+            LOAD_ELO.format(**self.load_dict),
             self.conn,
         )
         return score_unpivot(self._load_post_proc(dynasty_df))
@@ -192,7 +192,7 @@ class EloSQL(DataBase):
             year_end = f'AND league_year = {year}'
             self.load_dict.update({'year_end': year_end})
             frame = pd.read_sql_query(
-                query.format(self.load_dict),
+                query.format(**self.load_dict),
                 self.conn,
             )
             frames[year] = score_unpivot(self._load_post_proc(frame))
@@ -201,7 +201,7 @@ class EloSQL(DataBase):
     def _lookup_league_id(self, platform_id: str) -> int:
         dim = self.dim_tables['league']
         mask = dim['platform_league_id'] == platform_id
-        return dim['league_id'][mask][0]
+        return dim['league_id'][mask].iloc[0]
 
     def load_frames(self, platform_id: str, frame_set: str | list[str] | None = None) -> dict[str, Any]:
         loaders = {

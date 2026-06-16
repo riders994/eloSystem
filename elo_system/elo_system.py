@@ -1,5 +1,6 @@
 from typing import Any
 from pathlib import Path
+from random import choice
 
 from .tools import EloLeague, EloCSV, EloSQL
 from .tools.basics import load_config_file, write_config_file, str_to_path
@@ -93,7 +94,7 @@ class EloSystem:
             config = load_config_file(Path(self.configs_dir, self.sql_config_loc))
         if self._validate_sql_config(config):
             self.sql_config = config
-            # self.elo_sql = EloSQL(self.sql_config)
+            self.elo_sql = EloSQL(self.sql_config)
             self._assign_rw()
 
     @staticmethod
@@ -206,5 +207,6 @@ class EloSystem:
         if isinstance(self.reader, EloCSV):
             frames = self.reader.load_frames(frame_set)
         elif isinstance(self.reader, EloSQL):
-            frames = self.reader.load_frames(frame_set)
+            pid = choice(list(self.elo_league.seasons.keys()))
+            frames = self.reader.load_frames(pid, frame_set)
         self.elo_league.load_frames(frames)
