@@ -15,7 +15,7 @@ from .common_funcs import (
 
 from .constants import (
     APPROVED_SQL_FLAVORS,
-    ELO_COLS,
+    ELO_DB_COLS,
     ELO_DIMS,
     PLAYOFF_START,
     ROTO_COLS,

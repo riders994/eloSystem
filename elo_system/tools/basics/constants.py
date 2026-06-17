@@ -11,12 +11,12 @@ APPROVED_SQL_FLAVORS = {
 }
 
 ELO_DIMS = {
-    'league',
+    'online_league',
     'manager',
     'team',
 }
 
-ELO_COLS = [
+ELO_DB_COLS = [
     'team_id',
     'league_id',
     'league_year',

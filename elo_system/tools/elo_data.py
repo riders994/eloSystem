@@ -8,7 +8,7 @@ from rv_pytools.sqltools import connect
 from .basics import (
     DataBase,
     ELO_DIMS,
-    ELO_COLS,
+    ELO_DB_COLS,
     LOAD_ELO,
     LOAD_ROTO,
     ROTO_DB_COLS
@@ -84,6 +84,14 @@ class EloSQL(DataBase):
     def reset_dims(self) -> bool:
         return self.pull_dims(overwrite=True)
 
+    def _set_dynasty_season(self) -> None:
+        seasons = self.curr_league_config['seasons']
+        seas_col = list()
+        for year, season in seasons.items():
+            csl = season['current_season_length'] + 1
+            seas_col += [year] * csl
+        self.current_frame['league_year'] = self.current_frame['week'].map({i: v for i, v in enumerate(seas_col)})
+
     def _elo_publish_prep(self) -> None:
         dim_on = ['platform_team_id', 'league_year']
         # manager_id / team_id are the numeric indexes of their dim tables;
@@ -106,15 +114,7 @@ class EloSQL(DataBase):
             deduped_man_teams,
             on=dim_on,
             how='inner'
-        )[ELO_COLS]
-
-    def _set_dynasty_season(self) -> pd.DataFrame:
-        seasons = self.curr_league_config['seasons']
-        seas_col = list()
-        for year, season in seasons.items():
-            csl = season['current_season_length'] + 1
-            seas_col += [year] * csl
-        self.current_frame['league_year'] = self.current_frame['week'].map({i: v for i, v in enumerate(seas_col)})
+        )[ELO_DB_COLS]
 
     def _roto_frame_prep(self):
         self.current_frame.rename(columns={'rating': 'score'}, inplace=True)
@@ -188,15 +188,17 @@ class EloSQL(DataBase):
         # default seasons_by='year' that key is the season year; under
         # 'order' it is the ordinal the file was written with.
         frames: dict[Any, pd.DataFrame] = {}
+
+        if destination == 'seasonal_elo':
+            query = LOAD_ELO
+        elif destination == 'roto_history':
+            query = LOAD_ROTO
+
         years = self._lookup_league_years(league_id)
         self.load_dict.update({
             'is_dynasty': 'FALSE',
             'league_id': league_id
         })
-        if destination == 'seasonal_elo':
-            query = LOAD_ELO
-        elif destination == 'roto_history':
-            query = LOAD_ROTO
 
         for year in years:
             year_end = f'AND league_year = {year}'
@@ -240,6 +242,15 @@ class EloSQL(DataBase):
     def publish(self, payload: dict[str, Any]) -> None:
         self.curr_league_config = payload['config']
         super().publish(payload)
+
+    def update_dim_team(self) -> int:
+        pass
+
+    def update_dim_manager(self) -> int:
+        pass
+
+    def update_dim_online_league(self) -> int:
+        pass
 
 
 class EloCSV(DataBase):

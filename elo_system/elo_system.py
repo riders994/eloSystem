@@ -84,9 +84,34 @@ class EloSystem:
         self.reader = rw[self.reader_key]
         self.writer = rw[self.writer_key]
 
+    def toggle_reader(self):
+        if isinstance(self.reader, EloCSV):
+            if self.elo_sql is not None:
+                self.reader = self.elo_sql
+            else:
+                raise KeyError('No SQL reader available')
+        if isinstance(self.reader, EloSQL):
+            if self.elo_league is not None:
+                self.reader = self.elo_league
+            else:
+                raise KeyError('No CSV reader available')
+
+    def toggle_writer(self):
+        if isinstance(self.writer, EloCSV):
+            if self.elo_sql is not None:
+                self.writer = self.elo_sql
+            else:
+                raise KeyError('No SQL writer available')
+        if isinstance(self.writer, EloSQL):
+            if self.elo_league is not None:
+                self.writer = self.elo_league
+            else:
+                raise KeyError('No CSV writer available')
+
     @staticmethod
     def _validate_sql_config(config: dict) -> bool:
-
+        if config.get('conn_dict', config.get('conn_uri')) is None:
+            return False
         return True
 
     def read_sql_config(self, config: dict | None) -> None:
@@ -192,12 +217,6 @@ class EloSystem:
         self.write_configs(list(res.keys()))
 
         return res
-
-    def toggle_reader(self):
-        pass
-
-    def toggle_writer(self):
-        pass
 
     def publish(self):
         payload = self.elo_league.publish()

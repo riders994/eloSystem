@@ -135,7 +135,7 @@ def validate_conn_dict(v: dict[str, Any]) -> bool:
         return False
     if v.get('host') is None:
         return False
-    if v.get('conn_dict') not in APPROVED_SQL_FLAVORS:
+    if v.get('dialect') not in APPROVED_SQL_FLAVORS:
         return False
 
     return True

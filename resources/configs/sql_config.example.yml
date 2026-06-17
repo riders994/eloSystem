@@ -1,8 +1,20 @@
-# SQL backend config. Copy to sql_config.yml and edit.
-# The SQL backend (EloSQL) is not yet implemented; this is a placeholder.
-# host: localhost
-# port: 5432
-# dbname: elo
-# user: elo
-# password: ""
-# schema: public
+# SQL backend config (EloSQL). Copy to sql_config.yml and edit.
+#
+# Supply connection details in ONE of two ways:
+#   1. conn_dict — a mapping of discrete connection fields (below), or
+#   2. conn_uri  — a single SQLAlchemy/libpq URI string (see bottom).
+# conn_dict wins if both are present.
+
+conn_dict:
+  dbname: elo            # database name (required)
+  user: elo             # role/username (required)
+  password: ""          # password (required; "" for none)
+  host: localhost       # required
+  port: 5432            # required
+
+# Schema holding the dim_*/fact_* tables. Defaults to fantasy_sports.
+# May also be set as a `schema:` key inside conn_dict.
+schema: fantasy_sports
+
+# Alternative to conn_dict — a single URI (parsed into the fields above):
+# conn_uri: postgresql://elo:password@localhost:5432/elo
