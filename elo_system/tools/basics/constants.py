@@ -11,8 +11,9 @@ APPROVED_SQL_FLAVORS = {
 }
 
 ELO_DIMS = {
-    'online_league',
+    'league',
     'manager',
+    'online_league',
     'team',
 }
 

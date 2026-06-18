@@ -20,6 +20,7 @@ class EloLeague(LeagueBase):
         self.seasons = dict()
 
         self.current_league = None
+        self.league_id = -1
 
         self.current_season = None
         self.extras = 0
@@ -50,6 +51,7 @@ class EloLeague(LeagueBase):
         self.is_dynasty: bool = self.config.get('is_dynasty', False)
         self.is_roto: bool = self.config.get('is_roto', False)
         self.k: int = self.config.get('k', self.k)
+        self.league_id: int = self.config.get('league_id', self.league_id)
         self.seasons.update(self.config.get('seasons', dict()))
 
     def _dump(self) -> None:
@@ -59,8 +61,12 @@ class EloLeague(LeagueBase):
             'is_dynasty': self.is_dynasty,
             'seasons': self.seasons,
             'is_roto': self.is_roto,
-            'k': self.k
+            'k': self.k,
+            'league_id': self.league_id
         })
+
+    def set_lid(self, new: int) -> None:
+        self.league_id = new
 
     @staticmethod
     def _validate_fantrax(seas_dict: dict[str, Any]) -> bool:

@@ -3,6 +3,7 @@ import psycopg2
 
 from typing import Any
 from pathlib import Path
+from random import choice
 from rv_pytools.sqltools import connect
 
 from .basics import (
@@ -56,6 +57,7 @@ class EloSQL(DataBase):
         self.dim_tables: dict[str, pd.DataFrame] = {}
         self.reset_dims()
 
+        self.curr_league_id = -1
         self.curr_league_config: dict[str, Any] = dict()
 
         self.current_frame = pd.DataFrame()
@@ -168,12 +170,13 @@ class EloSQL(DataBase):
         ).rename(columns={'platform_team_id': 'member'})[['member', 'week', 'rating']]
 
     def _load_dynasty(self, league_id: int) -> pd.DataFrame | None:
-        self.load_dict.update({
+        loader = self.load_dict.copy()
+        loader.update({
             'is_dynasty': 'TRUE',
             'league_id': league_id
         })
         dynasty_df = pd.read_sql_query(
-            LOAD_ELO.format(**self.load_dict),
+            LOAD_ELO.format(**loader),
             self.conn,
         )
         return score_unpivot(self._load_post_proc(dynasty_df))
@@ -195,27 +198,37 @@ class EloSQL(DataBase):
             query = LOAD_ROTO
 
         years = self._lookup_league_years(league_id)
-        self.load_dict.update({
+        loader = self.load_dict.copy()
+        loader.update({
             'is_dynasty': 'FALSE',
             'league_id': league_id
         })
 
         for year in years:
             year_end = f'AND league_year = {year}'
-            self.load_dict.update({'year_end': year_end})
+            loader.update({'year_end': year_end})
             frame = pd.read_sql_query(
-                query.format(**self.load_dict),
+                query.format(**loader),
                 self.conn,
             )
             frames[year] = score_unpivot(self._load_post_proc(frame))
         return frames
 
-    def _lookup_league_id(self, platform_id: str) -> int:
+    def _lookup_league_id(self, config: dict[str, Any]) -> int:
+        seasons = config['seasons']
+        plid = choice(seasons.values())['league_id']
         dim = self.dim_tables['league']
-        mask = dim['platform_league_id'] == platform_id
-        return dim['league_id'][mask].iloc[0]
+        return max(dim[dim['platform_league_id'] == plid]['league_id'])
 
-    def load_frames(self, platform_id: str, frame_set: str | list[str] | None = None) -> dict[str, Any]:
+    def get_lid(self, league_config: dict[str, Any] = {}) -> int:
+        self.curr_league_id = league_config.get('league_id', -1)
+        if self.curr_league_id < 0:
+            self.curr_league_id = self._lookup_league_id(league_config)
+        return self.curr_league_id
+
+    def load_frames(self, league_config: dict[str, Any], frame_set: str | list[str] | None = None) -> dict[str, Any]:
+        league_id = self.get_lid(league_config)
+
         loaders = {
             'dynasty_elo': self._load_dynasty,
             'seasonal_elo': self._load_indexed_set,
@@ -226,13 +239,14 @@ class EloSQL(DataBase):
         elif isinstance(frame_set, str):
             frame_set = [frame_set]
 
-        league_id = self._lookup_league_id(platform_id)
-
         out: dict[str, Any] = {}
         for fs in frame_set:
             if fs not in loaders:
                 raise KeyError('Unknown frame set: {}'.format(fs))
-            loaded = loaders[fs](league_id)
+            if fs == 'dynasty_elo':
+                loaded = loaders[fs](league_id)
+            else:
+                loaded = loaders[fs](league_id, fs)
             # Omit sets with no data on disk so FrameManager.load_frames never
             # has to iterate a missing/None entry.
             if loaded is not None and (not isinstance(loaded, dict) or loaded):
@@ -243,13 +257,16 @@ class EloSQL(DataBase):
         self.curr_league_config = payload['config']
         super().publish(payload)
 
-    def update_dim_team(self) -> int:
+    def update_dim_league(self) -> int:
         pass
 
     def update_dim_manager(self) -> int:
         pass
 
-    def update_dim_online_league(self) -> int:
+    def update_dim_online_league(self, lid: int, pid: str, year: int) -> int:
+        pass
+
+    def update_dim_team(self) -> int:
         pass
 
 

@@ -1,6 +1,5 @@
 from typing import Any
 from pathlib import Path
-from random import choice
 
 from .tools import EloLeague, EloCSV, EloSQL
 from .tools.basics import load_config_file, write_config_file, str_to_path
@@ -226,6 +225,13 @@ class EloSystem:
         if isinstance(self.reader, EloCSV):
             frames = self.reader.load_frames(frame_set)
         elif isinstance(self.reader, EloSQL):
-            pid = choice(list(self.elo_league.seasons.keys()))
-            frames = self.reader.load_frames(pid, frame_set)
+            frames = self.reader.load_frames(self.elo_league.config, frame_set)
         self.elo_league.load_frames(frames)
+
+    def set_lid(self):
+        if isinstance(self.reader, EloCSV):
+            self.elo_league.set_lid(-1)
+        elif isinstance(self.reader, EloSQL):
+            self.elo_league.set_lid(self.reader.get_lid())
+        else:
+            raise NotImplementedError
