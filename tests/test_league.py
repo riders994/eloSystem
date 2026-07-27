@@ -185,6 +185,36 @@ def test_scrape_updates_existing_member_and_keeps_name_history(patched_ft, teams
     assert info['is_commish'] is True
 
 
+def test_repeated_scrapes_do_not_duplicate_the_name_history(patched_ft, teams):
+    first = teams[0]
+    league = FantraxLeague(YEAR, make_year_config())
+    league.scrape()
+    league.scrape()
+    league.scrape()
+
+    # Every scrape reports the current name; only a new one belongs in history.
+    assert league.league_members[first.owners]['names'] == [first.name]
+
+
+def test_scrape_appends_a_genuinely_new_name_to_the_history(patched_ft, teams):
+    first = teams[0]
+    existing = {
+        first.owners: {
+            'curr_name': 'Original Name',
+            'names': ['Original Name'],
+            'short_name': 'OLD',
+            'team_id': 'oldteamid',
+            'is_commish': False,
+            'standing': 100,
+        }
+    }
+    league = FantraxLeague(YEAR, make_year_config(league_members=existing))
+    league.scrape()
+    league.scrape()
+
+    assert league.league_members[first.owners]['names'] == ['Original Name', first.name]
+
+
 def test_scrape_stores_the_standing_for_every_member(patched_ft, teams):
     league = FantraxLeague(YEAR, make_year_config())
     league.scrape()

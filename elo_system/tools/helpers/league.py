@@ -83,7 +83,11 @@ class League(LeagueBase):
         if old_info is None:
             self._set_member(member_id, member_info)
         else:
-            old_info['names'].append(member_info['curr_name'])
+            # names is the history of what this member has called their team;
+            # every scrape reports the current one, so only a name not already
+            # on record is worth recording.
+            if member_info['curr_name'] not in old_info['names']:
+                old_info['names'].append(member_info['curr_name'])
             old_info.update({
                 'short_name': member_info['curr_short'],
                     'team_id': member_info['team_id'],
