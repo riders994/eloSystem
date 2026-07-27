@@ -12,9 +12,12 @@ The real objects of interest:
   '<category short name>': float, ..., 'Pts': float}``.
 - ``fantraxapi.objs.scoring_period.ScoringPeriodResult``: ``.playoffs``
   (bool), ``.name``, and ``.matchups`` -- a dict keyed by matchup id.
+- ``fantraxapi.objs.standings.Standings``: ``.ranks`` -- a dict of
+  ``{rank: Record}``, where each ``Record`` carries ``.team`` and ``.rank``.
 - ``fantraxapi.League``: constructed as ``League(league_id=...)``;
   ``.scoring_period_results()`` returns ``dict[int, ScoringPeriodResult]``
-  keyed by 1-based period number; ``.teams`` is a list of Team objects.
+  keyed by 1-based period number; ``.standings()`` returns a Standings;
+  ``.teams`` is a list of Team objects.
 
 Everything here is built from SimpleNamespace / tiny classes carrying only
 the attributes the elo_system code reads, so other parts of the suite can
@@ -79,6 +82,20 @@ def make_default_teams(n=4):
     ]
 
 
+def make_standings(teams):
+    """Mock of a Standings object, ranking ``teams`` in the order given.
+
+    Ranks are 1-based, mirroring the real object; each value is a Record
+    stand-in carrying only the ``.team`` / ``.rank`` the scraper reads.
+    """
+    return SimpleNamespace(
+        ranks={
+            rank: SimpleNamespace(team=team, rank=rank)
+            for rank, team in enumerate(teams, 1)
+        }
+    )
+
+
 def make_matchup(home, away, home_stats=None, away_stats=None, matchup_key='1'):
     """Mock of an H2HRotisserie2 matchup.
 
@@ -138,16 +155,21 @@ def make_season(teams, playoff_flags):
     return periods
 
 
-def make_mock_league_cls(scoring_periods=None, teams=None):
+def make_mock_league_cls(scoring_periods=None, teams=None, standings=None):
     """Return a class suitable for monkeypatching ``fantraxapi.League``
     (the ``ft.League`` name imported by elo_system.tools.scraper) so that
     ``FantraxScraper.login()`` never touches the network.
+
+    ``standings`` defaults to ranking ``teams`` in the order given; pass one
+    explicitly (see :func:`make_standings`) to test a different finish order or
+    a team missing from the table.
 
     Every instantiation is recorded in ``cls.instances`` so tests can
     assert on the wiring (e.g. the league_id passed in).
     """
     scoring_periods = scoring_periods if scoring_periods is not None else {}
     teams = teams if teams is not None else []
+    standings = standings if standings is not None else make_standings(teams)
 
     class MockFantraxLeague:
         instances = []
@@ -160,5 +182,8 @@ def make_mock_league_cls(scoring_periods=None, teams=None):
 
         def scoring_period_results(self, season=True, playoffs=True):
             return dict(scoring_periods)
+
+        def standings(self, scoring_period_number=None, only_period=False):
+            return standings
 
     return MockFantraxLeague

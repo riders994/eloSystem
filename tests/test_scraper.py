@@ -12,6 +12,7 @@ from tests.mocks.fantrax import (
     make_default_teams,
     make_mock_league_cls,
     make_season,
+    make_standings,
 )
 
 LEAGUE_ID = 'lg123abc'
@@ -185,9 +186,42 @@ def test_get_members_keyed_by_owner_with_team_details(monkeypatch):
         'curr_name': first.name,
         'curr_short': first.short,
         'commish': True,
+        'standing': 1,
     }
     # Only the first default team is the commissioner.
     assert [info['commish'] for info in members.values()].count(True) == 1
+
+
+def test_get_members_takes_standing_from_the_standings_order(monkeypatch):
+    teams = make_default_teams(4)
+    # Rank the teams in reverse, so standing cannot be mistaken for team order.
+    mock_cls = make_mock_league_cls(
+        scoring_periods=make_season(teams, [False, False]),
+        teams=teams,
+        standings=make_standings(list(reversed(teams))),
+    )
+    monkeypatch.setattr(scraper_mod.ft, 'League', mock_cls)
+    scraper = FantraxScraper(_make_config())
+    scraper.login()
+
+    members = scraper.get_members()
+    assert [members[team.owners]['standing'] for team in teams] == [4, 3, 2, 1]
+
+
+def test_get_members_standing_falls_back_for_a_team_off_the_table(monkeypatch):
+    teams = make_default_teams(4)
+    # A placeholder team (e.g. a playoff Bye slot) never reaches the standings.
+    mock_cls = make_mock_league_cls(
+        scoring_periods=make_season(teams, [False, False]),
+        teams=teams,
+        standings=make_standings(teams[:3]),
+    )
+    monkeypatch.setattr(scraper_mod.ft, 'League', mock_cls)
+    scraper = FantraxScraper(_make_config())
+    scraper.login()
+
+    members = scraper.get_members()
+    assert members[teams[3].owners]['standing'] == 100
 
 
 # ---------------------------------------------------------------------------
