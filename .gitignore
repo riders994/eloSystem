@@ -19,3 +19,10 @@ resources/configs/*
 !resources/configs/*.example.yml
 resources/ratings/*
 !resources/ratings/.gitkeep
+
+# Anonymization reversal maps. These hold the real names the DB tokens stand
+# for, so committing one undoes the anonymizing. resources/* already covers the
+# default location; spell it out so a later un-ignore cannot expose them, and
+# catch the map files wherever anon_loc puts them.
+resources/anon/
+anon_*.json
