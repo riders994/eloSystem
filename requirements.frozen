@@ -11,7 +11,7 @@ psycopg2-binary==2.9.12
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 requests==2.32.5
-rv_pytools==1.1.1
+rv_pytools==1.2.1
 setuptools==82.0.1
 six==1.17.0
 sleeper==2.0.0

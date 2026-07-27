@@ -54,6 +54,26 @@ ROTO_DB_COLS = [
     'score'
 ]
 
+# Which dim columns the anonymizer replaces, and the category each is tokenised
+# under -- 'Nate' in a 'manager' category becomes 'manager_0'. Keyed by dim, so
+# each dim gets its own reversal map and one anonymize() call per push (the
+# function rewrites its whole map file per call, and numbers tokens from zero).
+# Columns sharing a category share tokens, which is how a manager reads the same
+# in dim_manager as in the fact tables. Override or extend via the SQL config's
+# anon_columns.
+ANON_COLS = {
+    'manager': {
+        'display_name': 'manager',
+        'player_name': 'person',
+    },
+}
+
+# The category carrying the member identity: the one the fact tables' denormalised
+# manager_name has to agree with.
+ANON_MEMBER_COL = 'display_name'
+
+ANON_MAP_FSTR = 'anon_{dim}.json'
+
 # Maps each publish destination (the payload keys FrameManager emits) onto the
 # fact table it lands in, the column that scopes a publish/load to one league or
 # season, and the column the rating itself is stored under.

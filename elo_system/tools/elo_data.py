@@ -1,14 +1,20 @@
+import json
+
 import pandas as pd
 import psycopg2
 
 from typing import Any
 from pathlib import Path
+from rv_pytools.functions import anonymize, deanonymize
 from rv_pytools.sqltools import connect
 
 from .basics import (
     DataBase,
     bigint_generator,
     id_generator,
+    ANON_COLS,
+    ANON_MAP_FSTR,
+    ANON_MEMBER_COL,
     ELO_DIMS,
     FACT_SPECS,
     LOAD_QUERIES
@@ -121,8 +127,13 @@ class EloSQL(DataBase):
     -- while the schema keys off surrogate ids. ``league_members`` in the league
     config bridges the two: it maps each member to the platform team id that
     identifies their ``dim_team`` row for a season, and each member is also a
-    ``dim_manager`` row under ``player_name``, which is what the load path
+    ``dim_manager`` row under ``display_name``, which is what the load path
     reads the index back out of.
+
+    With ``anonymizer`` set in the config, names are tokenised at the storage
+    boundary: the dim tables held here always carry real values, tokens exist
+    only in the DB, and the reversal maps live under ``anon_loc``. Which columns
+    that covers is ``anon_columns``, defaulting to the manager identity.
     """
 
     def __init__(
@@ -151,6 +162,18 @@ class EloSQL(DataBase):
             self.conn = connector
 
         self.schema = self.conn_dict.get('schema', config.get('schema', 'fantasy_sports'))
+
+        # Anonymisation is a storage-boundary concern: the dim tables held here
+        # always carry real values, and the tokens exist only in the DB. So it
+        # has to be configured before the first pull.
+        self.anonymized = bool(config.get('anonymizer', False))
+        self.anon_loc = Path(config.get('anon_loc', '.'))
+        self.anon_cols: dict[str, dict[str, str]] = {
+            dim: dict(cols) for dim, cols in ANON_COLS.items()
+        }
+        for dim, cols in config.get('anon_columns', dict()).items():
+            self.anon_cols.setdefault(dim, dict()).update(cols)
+
         self.dim_tables: dict[str, pd.DataFrame] = {}
         self.reset_dims()
 
@@ -180,6 +203,82 @@ class EloSQL(DataBase):
         """The cached dim table with its surrogate id back as a column."""
         return self.dim_tables[self._dim_table(dim)].reset_index()
 
+    # ------------------------------------------------------------------
+    # anonymisation
+    # ------------------------------------------------------------------
+
+    def _anon_map_path(self, dim: str) -> Path:
+        """Where a dim's reversal map lives.
+
+        One file per dim: anonymize() rewrites its whole map on every call, so
+        two dims sharing a file would leave the second one's tokens the only
+        ones reversible.
+        """
+        return self.anon_loc / ANON_MAP_FSTR.format(dim=dim)
+
+    def _anon_cols(self, dim: str) -> dict[str, str]:
+        frame = self.dim_tables.get(self._dim_table(dim))
+        if not self.anonymized or frame is None:
+            return dict()
+        return {
+            column: category
+            for column, category in self.anon_cols.get(dim, dict()).items()
+            if column in frame.columns
+        }
+
+    def _anonymize_dim(self, dim: str, frame: pd.DataFrame) -> pd.DataFrame:
+        """Tokenise a dim on its way to the DB, writing the reversal map.
+
+        Rows go out ordered by surrogate id so a token keeps meaning the same
+        row from one publish to the next: anonymize() numbers per call, so
+        anything that reordered the frame would silently repoint every token.
+        """
+        columns = self._anon_cols(dim)
+        if not columns:
+            return frame
+        self.anon_loc.mkdir(parents=True, exist_ok=True)
+        return anonymize(
+            frame.sort_values(self._dim_key(dim)),
+            columns,
+            self._anon_map_path(dim),
+        )
+
+    def _deanonymize_dim(self, dim: str, frame: pd.DataFrame) -> pd.DataFrame:
+        """Restore real values on a dim just read out of the DB.
+
+        A missing map leaves the frame as-is: tokens are still valid keys, so a
+        read against a DB anonymised elsewhere degrades to token-named members
+        rather than failing.
+        """
+        columns = self._anon_cols(dim)
+        if not columns or not self._anon_map_path(dim).exists():
+            return frame
+        return deanonymize(frame, columns, self._anon_map_path(dim))
+
+    def anon_tokens(self, dim: str, category: str) -> dict[Any, Any]:
+        """The real value -> token lookup for one category of one dim.
+
+        Lets the fact tables reuse the tokens a dim push just minted instead of
+        calling anonymize() again, which would overwrite that dim's map.
+        """
+        path = self._anon_map_path(dim)
+        if not self.anonymized or not path.exists():
+            return dict()
+        with path.open() as handle:
+            mapping = json.load(handle)
+        return {value: token for token, value in mapping.get(category, dict()).items()}
+
+    def _member_tokens(self) -> dict[Any, Any]:
+        """Tokens for the member identity, keyed by the real member name."""
+        category = self._anon_cols('manager').get(ANON_MEMBER_COL)
+        if category is None:
+            return dict()
+        return self.anon_tokens('manager', category)
+
+    # ------------------------------------------------------------------
+    # dimension tables
+    # ------------------------------------------------------------------
+
     def _pull_dim(self, dim: str, overwrite: bool) -> bool:
         table = self._dim_table(dim)
         if not overwrite:
@@ -190,6 +289,7 @@ class EloSQL(DataBase):
         self.dim_tables.update({table: pd.read_sql_query(
             f'SELECT * FROM {self.schema}.{table}', self.conn, index_col=self._dim_key(dim)
         )})
+        self.dim_tables[table] = self._deanonymize_dim(dim, self.dim_tables[table])
         return True
 
     def pull_dims(self, which: str | set[str] | None = None, overwrite: bool = False) -> bool:
@@ -211,7 +311,7 @@ class EloSQL(DataBase):
             return True
         upsert_dataframe(
             self.conn,
-            frame.reset_index(),
+            self._anonymize_dim(dim, frame.reset_index()),
             self._dim_table(dim),
             [self._dim_key(dim)],
             self.schema
@@ -665,9 +765,17 @@ class EloSQL(DataBase):
 
     def _shape_frame(self, destination: str, long: pd.DataFrame) -> pd.DataFrame:
         spec = FACT_SPECS[destination]
-        return self._attach_ids(long).rename(
+        shaped = self._attach_ids(long).rename(
             columns={'rating': spec['value']}
         ).reindex(columns=spec['columns'])
+        # manager_name is a denormalised copy of the dim's member identity, so
+        # it takes the token that dim's push already minted -- anonymising here
+        # would rewrite dim_manager's map and repoint every one of its tokens.
+        if (tokens := self._member_tokens()):
+            shaped['manager_name'] = shaped['manager_name'].map(
+                lambda name: tokens.get(name, name)
+            )
+        return shaped
 
     def _write_facts(self, destination: str, scope_id: int) -> int:
         spec = FACT_SPECS[destination]

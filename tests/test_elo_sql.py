@@ -101,6 +101,14 @@ class FakeDB:
 
     def upsert(self, conn, df, table, match_columns, schema='public'):
         self.upserts.append((table, df.copy()))
+        kept = self.tables.get(table)
+        if kept is None or kept.empty:
+            self.tables[table] = df.copy()
+        else:
+            incoming = set(df[match_columns].apply(tuple, axis=1))
+            keys = kept[match_columns].apply(tuple, axis=1)
+            self.tables[table] = pd.concat(
+                [kept[~keys.isin(incoming)], df], ignore_index=True)
         return len(df)
 
     def replace(self, conn, df, table, scope_column, scope_value, schema='public'):
@@ -691,3 +699,121 @@ def test_loaded_frames_are_consumable_by_frame_manager(db):
     assert 2024 in fm.seasonal_elo
     pd.testing.assert_frame_equal(
         fm.seasonal_elo[2024].sort_index(), seasonal.sort_index(), check_names=False)
+
+
+# ---------------------------------------------------------------------------
+# anonymisation
+# ---------------------------------------------------------------------------
+
+def anon_config(tmp_path, **extra):
+    config = {'conn_dict': VALID_CONN, 'anonymizer': True, 'anon_loc': str(tmp_path)}
+    config.update(extra)
+    return config
+
+
+def test_anonymize_is_off_by_default(db, tmp_path):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    _, pushed = next(t for t in db.upserts if t[0] == 'dim_manager')
+    assert set(pushed['display_name']) == {'Nate', 'abrieff'}
+    assert list(tmp_path.glob('*.json')) == []
+
+
+def test_anonymize_writes_tokens_to_the_db_not_names(db, tmp_path):
+    obj = make_elosql(db, anon_config(tmp_path), LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    _, pushed = next(t for t in db.upserts if t[0] == 'dim_manager')
+    assert set(pushed['display_name']) == {'manager_0', 'manager_1'}
+    # player_name gets its own category, so the two never share a token.
+    assert all(name.startswith('person_') for name in pushed['player_name'])
+    # The dim held in memory is untouched -- tokens live only in the DB.
+    assert set(obj._dim('manager')['display_name']) == {'Nate', 'abrieff'}
+
+
+def test_anonymize_writes_a_reversal_map(db, tmp_path):
+    obj = make_elosql(db, anon_config(tmp_path), LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    import json
+    mapping = json.loads((tmp_path / 'anon_manager.json').read_text())
+    assert set(mapping['manager'].values()) == {'Nate', 'abrieff'}
+
+
+def test_fact_manager_name_carries_the_dim_token(db, tmp_path):
+    obj = make_elosql(db, anon_config(tmp_path), LEAGUE_CONFIG)
+    obj.publish({'config': LEAGUE_CONFIG,
+                 'seasonal_elo': {2024: _frame(['Nate', 'abrieff'], 2)}})
+
+    _, facts = db.replaces[-1]
+    _, managers = next(t for t in reversed(db.upserts) if t[0] == 'dim_manager')
+    token_by_id = dict(zip(managers['manager_id'], managers['display_name']))
+
+    assert not {'Nate', 'abrieff'} & set(facts['manager_name'])
+    # Every fact row's name matches the token on its own manager's dim row.
+    for _, row in facts.iterrows():
+        assert row['manager_name'] == token_by_id[row['manager_id']]
+
+
+def test_anonymized_frames_round_trip_through_a_fresh_reader(db, tmp_path):
+    obj = make_elosql(db, anon_config(tmp_path), LEAGUE_CONFIG)
+    seasonal = _frame(['Nate', 'abrieff'], 3)
+    obj.publish({'config': LEAGUE_CONFIG, 'seasonal_elo': {2024: seasonal}})
+
+    # A reader that never saw the real names, reading tokens out of the DB.
+    reader = make_elosql(db, anon_config(tmp_path), LEAGUE_CONFIG)
+    assert set(reader._dim('manager')['display_name']) == {'Nate', 'abrieff'}
+
+    loaded = reader.load_frames('seasonal_elo')
+    pd.testing.assert_frame_equal(
+        loaded['seasonal_elo'][2024].sort_index(),
+        seasonal.sort_index(),
+        check_names=False,
+    )
+
+
+def test_reader_without_the_map_falls_back_to_tokens(db, tmp_path):
+    obj = make_elosql(db, anon_config(tmp_path), LEAGUE_CONFIG)
+    obj.publish({'config': LEAGUE_CONFIG,
+                 'seasonal_elo': {2024: _frame(['Nate', 'abrieff'], 2)}})
+
+    # Map left behind; a reader pointed elsewhere cannot reverse the tokens.
+    elsewhere = tmp_path / 'no_map'
+    reader = make_elosql(db, anon_config(elsewhere), LEAGUE_CONFIG)
+    loaded = reader.load_frames('seasonal_elo')
+    # Degrades to token-named members rather than failing outright.
+    assert set(loaded['seasonal_elo'][2024].index) == {'manager_0', 'manager_1'}
+
+
+def test_tokens_stay_put_when_a_member_is_added(db, tmp_path):
+    obj = make_elosql(db, anon_config(tmp_path), _config_with(2024, 'Nate'))
+    obj.sync_dims()
+    _, first = next(t for t in reversed(db.upserts) if t[0] == 'dim_manager')
+    nate_token = first[first['manager_id'] == 0]['display_name'].iloc[0]
+
+    grown = _config_with(2024, 'Nate')
+    grown['seasons'][2024]['league_members']['abrieff'] = {
+        'team_id': 't2', 'curr_name': 'Abe FC', 'short_name': 'ABE',
+        'is_commish': False}
+    obj.set_league_config(grown)
+    obj.sync_dims()
+
+    _, second = next(t for t in reversed(db.upserts) if t[0] == 'dim_manager')
+    # A newcomer appends; it must not renumber whoever was already stored.
+    assert second[second['manager_id'] == 0]['display_name'].iloc[0] == nate_token
+
+
+def test_anon_columns_config_extends_the_defaults(db, tmp_path):
+    obj = make_elosql(
+        db,
+        anon_config(tmp_path, anon_columns={'team': {'team_name': 'team'}}),
+        LEAGUE_CONFIG,
+    )
+    obj.sync_dims()
+
+    _, teams = next(t for t in reversed(db.upserts) if t[0] == 'dim_team')
+    assert all(name.startswith('team_') for name in teams['team_name'])
+    # Untouched columns still go out as themselves.
+    assert set(teams['platform_team_id']) == {'t1', 't2', 't3'}
+    assert set(obj._dim('team')['team_name']) == {'Nate FC', 'Abe FC'}

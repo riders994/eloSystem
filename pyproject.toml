@@ -29,6 +29,9 @@ dependencies = [
     "numpy>=1.26",
     "PyYAML>=6.0",
     "psycopg2-binary>=2.9",
+    # EloSQL's connection helper, plus the anonymize/deanonymize pair added in
+    # 1.2.0 and fixed for index levels in 1.2.1.
+    "rv_pytools>=1.2.1",
     # The PyPI release of fantraxapi is broken for H2H-rotisserie leagues; a
     # forked copy is vendored at elo_system/_vendor/fantraxapi (see its LICENSE
     # and __init__.py for provenance). ``requests`` is its only runtime dep.

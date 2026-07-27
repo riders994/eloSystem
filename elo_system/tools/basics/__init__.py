@@ -16,6 +16,9 @@ from .common_funcs import (
 )
 
 from .constants import (
+    ANON_COLS,
+    ANON_MAP_FSTR,
+    ANON_MEMBER_COL,
     APPROVED_SQL_FLAVORS,
     DYNASTY_DB_COLS,
     ELO_DIM_COLS,
