@@ -71,7 +71,11 @@ class EloCSV(DataBase):
 
     def _read_csv(self, file_path: Path) -> pd.DataFrame:
         # index=True on publish writes the member id index; restore it here.
-        return pd.read_csv(file_path, index_col=0)
+        # round_trip parsing costs a little speed and buys back the last bit of
+        # every rating: the default parser is up to an ulp out, which is enough
+        # to make a frame read from here differ from the same one read from the
+        # SQL backend, where float8 is exact.
+        return pd.read_csv(file_path, index_col=0, float_precision='round_trip')
 
     def _load_single(self, fstr: str) -> pd.DataFrame | None:
         file_path = Path(self.in_dir, fstr.format(ext=self.extension))
@@ -437,11 +441,33 @@ class EloSQL(DataBase):
     def _members(self, year: Any) -> dict[str, Any]:
         return self.seasons.get(year, dict()).get('league_members', dict())
 
+    def _scraped_league_name(self) -> str | None:
+        """The platform's own name for this league.
+
+        Each season is a separate league on the platform carrying the same
+        display name, so the newest scraped season wins.
+        """
+        if (name := self.league_config.get('league_name')):
+            return name
+        for year in sorted(self.seasons, reverse=True):
+            if (name := self.seasons[year].get('league_name')):
+                return name
+        return None
+
     def _ensure_league(self) -> int:
+        name = self._scraped_league_name()
         if self.league_id >= 0:
+            # An existing row may predate the scrape that learned the real name
+            # -- refresh it, but never blank it back to a placeholder.
+            if name and name != self.league_name:
+                self.league_name = name
+                self._update_dim('league', [{'league_id': self.league_id,
+                                             'league_name': name}])
             return self.league_id
+
         self.league_id = self._next_dim_id('league')
-        self.league_name = self.league_config.get('league_name', id_generator())
+        # A generated name only stands in until a scrape supplies the real one.
+        self.league_name = name or id_generator()
         self._append_dim('league', [{
             'league_id': self.league_id,
             'discord_server_id': self.league_config.get('discord_server_id', bigint_generator()),

@@ -886,3 +886,56 @@ def test_push_dims_reorders_an_explicit_subset(db):
 
     obj.push_dims({'team', 'manager'})
     assert [table for table, _ in db.upserts] == ['dim_manager', 'dim_team']
+
+
+# ---------------------------------------------------------------------------
+# league name
+# ---------------------------------------------------------------------------
+
+def _named_config(name):
+    config = {k: v for k, v in LEAGUE_CONFIG.items() if k != 'seasons'}
+    config['seasons'] = {
+        year: dict(season, league_name=name)
+        for year, season in LEAGUE_CONFIG['seasons'].items()
+    }
+    return config
+
+
+def test_league_name_comes_from_the_scraped_season(db):
+    obj = make_elosql(db, league_config=_named_config("Mao's Macho Mandarins"))
+    obj.sync_dims()
+
+    assert obj.league_name == "Mao's Macho Mandarins"
+    assert obj._dim('league')['league_name'].iloc[0] == "Mao's Macho Mandarins"
+
+
+def test_league_name_falls_back_to_a_placeholder(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+    # Nothing scraped a name, so the row still gets a usable one.
+    assert obj.league_name
+    assert obj._dim('league')['league_name'].iloc[0] == obj.league_name
+
+
+def test_a_scraped_name_replaces_an_earlier_placeholder(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+    placeholder = obj.league_name
+
+    obj.set_league_config(_named_config("Mao's Macho Mandarins"))
+    obj.sync_dims()
+
+    assert obj.league_name == "Mao's Macho Mandarins"
+    league = obj._dim('league')
+    assert len(league) == 1
+    assert league['league_name'].iloc[0] == "Mao's Macho Mandarins"
+    assert placeholder not in set(league['league_name'])
+
+
+def test_a_missing_name_never_blanks_a_stored_one(db):
+    obj = make_elosql(db, league_config=_named_config("Mao's Macho Mandarins"))
+    obj.sync_dims()
+
+    obj.set_league_config(LEAGUE_CONFIG)  # no league_name anywhere
+    obj.sync_dims()
+    assert obj._dim('league')['league_name'].iloc[0] == "Mao's Macho Mandarins"

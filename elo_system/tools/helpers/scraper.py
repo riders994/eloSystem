@@ -50,6 +50,11 @@ class LeagueScraper(LeagueBase, ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_league_name(self) -> str | None:
+        """Return the league's display name on the platform, if it has one."""
+        raise NotImplementedError
+
+    @abstractmethod
     def get_scoreboard(self, week: int):
         """Return the scoreboard object for the given week."""
         raise NotImplementedError
@@ -96,6 +101,9 @@ class FantraxScraper(LeagueScraper):
             return i + 1
         else:
             return PLAYOFF_START
+
+    def get_league_name(self) -> str | None:
+        return getattr(self.league_wrapper, 'name', None)
 
     def get_members(self) -> dict[str, Any]:
         rank_by_team = {record.team.id: rank for rank, record in self.standings.ranks.items()}

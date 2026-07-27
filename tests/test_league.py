@@ -285,3 +285,14 @@ def test_get_week_falls_back_to_current_season_length(patched_ft):
     league.load()
     assert league.last_scored_week is None
     assert league.get_week() is periods[4]
+
+
+def test_scrape_captures_the_platform_league_name(monkeypatch, teams):
+    mock_cls = make_mock_league_cls(scoring_periods=make_season(teams, PLAYOFF_FLAGS),
+                                    teams=teams, name="Mao's Macho Mandarins")
+    monkeypatch.setattr(scraper_mod.ft, 'League', mock_cls)
+    league = FantraxLeague(YEAR, make_year_config())
+    dumped = league.scrape()
+
+    assert league.league_name == "Mao's Macho Mandarins"
+    assert dumped['league_name'] == "Mao's Macho Mandarins"

@@ -26,6 +26,7 @@ class League(LeagueBase):
         self.last_scored_week = None
         self.league_id = None
         self.league_members = dict()
+        self.league_name = None
         self.playoff_start = PLAYOFF_START
 
         self.scoreboards = dict()
@@ -44,6 +45,7 @@ class League(LeagueBase):
         self.dynasty_start_week = self.config.get('dynasty_start_week', self.dynasty_start_week)
         self.last_scored_week = self.config.get('last_scored_week', self.last_scored_week)
         self.league_members = self.config.get('league_members', self.league_members)
+        self.league_name = self.config.get('league_name', self.league_name)
         self.playoff_start = self.config.get('playoff_start', self.playoff_start)
         self._generate_scraper()
 
@@ -55,6 +57,7 @@ class League(LeagueBase):
             'last_scored_week': self.last_scored_week,
             'league_id': self.league_id,
             'league_members': self.league_members,
+            'league_name': self.league_name,
             'playoff_start': self.playoff_start
         })
 
@@ -128,10 +131,17 @@ class League(LeagueBase):
         else:
             self.playoff_start = self._get_playoff_start()
 
+    def set_league_name(self, name: str | None = None) -> None:
+        if name is None:
+            name = self.scraper.get_league_name()
+        if name:
+            self.league_name = name
+
     def scrape(self) -> dict[str, Any]:
         self.load()
         self.set_playoff_start()
         self.set_current_season_length()
+        self.set_league_name()
         self.reset_members()
 
         return self.dump()

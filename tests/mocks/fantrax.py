@@ -155,7 +155,8 @@ def make_season(teams, playoff_flags):
     return periods
 
 
-def make_mock_league_cls(scoring_periods=None, teams=None, standings=None):
+def make_mock_league_cls(scoring_periods=None, teams=None, standings=None,
+                         name='Mock League'):
     """Return a class suitable for monkeypatching ``fantraxapi.League``
     (the ``ft.League`` name imported by elo_system.tools.scraper) so that
     ``FantraxScraper.login()`` never touches the network.
@@ -178,6 +179,7 @@ def make_mock_league_cls(scoring_periods=None, teams=None, standings=None):
             self.league_id = league_id
             self.init_kwargs = kwargs
             self.teams = list(teams)
+            self.name = name
             type(self).instances.append(self)
 
         def scoring_period_results(self, season=True, playoffs=True):

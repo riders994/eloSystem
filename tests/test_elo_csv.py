@@ -104,3 +104,21 @@ def test_loaded_frames_consumable_by_frame_manager(tmp_path):
     assert 2024 in fm.seasonal_elo
     pd.testing.assert_frame_equal(
         fm.seasonal_elo[2024], seasonal[2024], check_names=False)
+
+
+def test_publish_load_is_bit_exact(tmp_path):
+    # The default read_csv float parser is up to an ulp out, which would make a
+    # frame read back here differ from the same one read from the SQL backend.
+    csv = make_csv(tmp_path)
+    frame = pd.DataFrame(
+        {
+            'week_0': [1500.0, 1500.0],
+            'week_1': [1523.3333333333333, 1476.6666666666667],
+            'week_2': [1569.0218685077791, 1430.9781314922209],
+        },
+        index=['a', 'b'],
+    )
+    csv.publish({'seasonal_elo': {2024: frame}})
+
+    loaded = csv.load_frames('seasonal_elo')['seasonal_elo'][2024]
+    assert loaded.equals(frame), 'round trip lost precision'

@@ -27,6 +27,9 @@ class _ConcreteScraper(LeagueScraper):
     def get_members(self):
         return {}
 
+    def get_league_name(self):
+        return None
+
     def get_scoreboard(self, week):
         return None
 
@@ -63,7 +66,7 @@ def test_base_scraper_is_abstract():
     with pytest.raises(TypeError):
         LeagueScraper(_make_config())
     assert LeagueScraper.__abstractmethods__ == {
-        'login', 'get_members', 'get_scoreboard',
+        'login', 'get_members', 'get_league_name', 'get_scoreboard',
         'get_playoff_start', 'get_current_season_length',
     }
 
@@ -242,3 +245,16 @@ def test_get_scoreboard_indexes_periods_by_week_number(monkeypatch):
     assert board3 is periods[3]
     assert scraper.current_matchup is board3
     assert board3.playoffs is True
+
+
+def test_get_league_name_reads_the_wrapper(monkeypatch):
+    mock_cls = make_mock_league_cls(scoring_periods=make_season(make_default_teams(4), [False]),
+                                    teams=make_default_teams(4), name="Mao's Macho Mandarins")
+    monkeypatch.setattr(scraper_mod.ft, 'League', mock_cls)
+    scraper = FantraxScraper(_make_config())
+    scraper.login()
+    assert scraper.get_league_name() == "Mao's Macho Mandarins"
+
+
+def test_get_league_name_before_login_is_none():
+    assert FantraxScraper(_make_config()).get_league_name() is None
