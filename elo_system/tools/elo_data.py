@@ -16,6 +16,7 @@ from .basics import (
     ANON_MAP_FSTR,
     ANON_MEMBER_COL,
     DEFAULT_ANON_DIR,
+    ELO_DIM_ORDER,
     ELO_DIMS,
     FACT_SPECS,
     LOAD_QUERIES
@@ -330,8 +331,13 @@ class EloSQL(DataBase):
         if isinstance(which, str):
             return self._push_dim(which)
         else:
+            # Parents before children, whatever order the caller asked in --
+            # the foreign keys out of dim_team and dim_online_league make the
+            # write order load-bearing.
             if which is None:
-                which = ELO_DIMS
+                which = ELO_DIM_ORDER
+            else:
+                which = [dim for dim in ELO_DIM_ORDER if dim in which]
             for each in which:
                 self._push_dim(each)
             return True

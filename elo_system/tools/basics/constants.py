@@ -17,6 +17,16 @@ ELO_DIMS = {
     'team',
 }
 
+# Write order for the dims: dim_team has foreign keys into dim_manager and
+# dim_online_league, and dim_online_league into dim_league, so parents have to
+# land first. ELO_DIMS is a set, and its iteration order would not respect that.
+ELO_DIM_ORDER = (
+    'league',
+    'online_league',
+    'manager',
+    'team',
+)
+
 ELO_DIM_COLS = {
     'league': ['league_id', 'discord_server_id', 'platform', 'league_name'],
     'manager': ['manager_id', 'player_name', 'display_name', 'discord_id', 'is_comanager'],

@@ -861,3 +861,28 @@ def test_elo_system_points_the_maps_at_resources(db, tmp_path, monkeypatch):
     es.set_elo_sql({'conn_dict': VALID_CONN, 'anonymizer': True}, FakeConn())
 
     assert es.elo_sql.anon_loc == tmp_path / 'resources' / 'anon'
+
+
+# ---------------------------------------------------------------------------
+# dim write order
+# ---------------------------------------------------------------------------
+
+def test_push_dims_writes_parents_before_children(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    order = [table for table, _ in db.upserts]
+    # dim_team has FKs into dim_manager and dim_online_league; dim_online_league
+    # into dim_league. ELO_DIMS is a set, so this cannot be left to iteration.
+    assert order.index('dim_league') < order.index('dim_online_league')
+    assert order.index('dim_online_league') < order.index('dim_team')
+    assert order.index('dim_manager') < order.index('dim_team')
+
+
+def test_push_dims_reorders_an_explicit_subset(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+    db.upserts.clear()
+
+    obj.push_dims({'team', 'manager'})
+    assert [table for table, _ in db.upserts] == ['dim_manager', 'dim_team']

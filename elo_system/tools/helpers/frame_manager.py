@@ -21,7 +21,15 @@ class FrameManager(LeagueBase):
 
         super().__init__(config)
 
-        self.member_dict = {k: v.get('league_members') for k, v in self.config.items()}
+    @property
+    def member_dict(self) -> dict[Any, Any]:
+        """League members per season, read live off the config.
+
+        Seasons are scraped one at a time, and run_prep only builds the
+        FrameManager once -- so a snapshot taken here would leave every season
+        scraped after the first without members.
+        """
+        return {k: v.get('league_members') for k, v in self.config.items()}
 
     @staticmethod
     def _validate_load_frame(frame) -> bool:
@@ -134,7 +142,10 @@ class FrameManager(LeagueBase):
         if overwrite or self.seasonal_elo.get(season) is None:
             players = self.member_dict[season]
             self.seasonal_elo[season] = pd.DataFrame(
-                {'week_0': [1500] * len(players)}, index=list(players.keys())
+                # Float, so the seeded week matches every week calculated after
+                # it -- and so a frame read back from the SQL backend, where
+                # elo is double precision, has the same dtypes as one from CSV.
+                {'week_0': [1500.0] * len(players)}, index=list(players.keys())
             )
 
         if self.is_dynasty:

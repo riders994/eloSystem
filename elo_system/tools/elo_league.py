@@ -295,6 +295,10 @@ class EloLeague(LeagueBase):
         return payload
 
     def load_frames(self, frames: dict[str, dict]) -> None:
+        # Loading is a valid first move -- restoring ratings from a backend does
+        # not require having run a season, which is otherwise the only thing
+        # that builds the frame manager.
+        self._set_frame_manager()
         self.frame_manager.load_frames(frames)
 
     def run(self, week: int | str, year: int | None = None, overwrite: bool = False, ):

@@ -23,6 +23,7 @@ from .constants import (
     DEFAULT_ANON_DIR,
     DYNASTY_DB_COLS,
     ELO_DIM_COLS,
+    ELO_DIM_ORDER,
     ELO_DIMS,
     FACT_SPECS,
     PLAYOFF_START,

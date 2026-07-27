@@ -79,35 +79,45 @@ class EloSystem:
         self.elo_sql = None
 
 
-    def _assign_rw(self):
-        rw = {'sql': self.elo_sql, 'csv': self.elo_csv}
+    def _backend(self, key: str):
+        return {'sql': self.elo_sql, 'csv': self.elo_csv}[key]
 
-        self.reader = rw[self.reader_key]
-        self.writer = rw[self.writer_key]
+    def _assign_rw(self):
+        self.reader = self._backend(self.reader_key)
+        self.writer = self._backend(self.writer_key)
+
+    def _other_key(self, current) -> str:
+        """The key of the backend that is not the one in hand."""
+        if isinstance(current, EloCSV):
+            return 'sql'
+        if isinstance(current, EloSQL):
+            return 'csv'
+        raise KeyError('Nothing to toggle from; load the configs first')
+
+    def _toggle(self, current):
+        key = self._other_key(current)
+        backend = self._backend(key)
+        if backend is None:
+            raise KeyError('No {} backend available'.format(key.upper()))
+        return key, backend
 
     def toggle_reader(self):
-        if isinstance(self.reader, EloCSV):
-            if self.elo_sql is not None:
-                self.reader = self.elo_sql
-            else:
-                raise KeyError('No SQL reader available')
-        if isinstance(self.reader, EloSQL):
-            if self.elo_league is not None:
-                self.reader = self.elo_league
-            else:
-                raise KeyError('No CSV reader available')
+        self.reader_key, self.reader = self._toggle(self.reader)
 
     def toggle_writer(self):
-        if isinstance(self.writer, EloCSV):
-            if self.elo_sql is not None:
-                self.writer = self.elo_sql
-            else:
-                raise KeyError('No SQL writer available')
-        if isinstance(self.writer, EloSQL):
-            if self.elo_league is not None:
-                self.writer = self.elo_league
-            else:
-                raise KeyError('No CSV writer available')
+        self.writer_key, self.writer = self._toggle(self.writer)
+
+    def set_reader(self, key: str) -> None:
+        """Point the reader at the 'csv' or 'sql' backend by name."""
+        if (backend := self._backend(key)) is None:
+            raise KeyError('No {} backend available'.format(key.upper()))
+        self.reader_key, self.reader = key, backend
+
+    def set_writer(self, key: str) -> None:
+        """Point the writer at the 'csv' or 'sql' backend by name."""
+        if (backend := self._backend(key)) is None:
+            raise KeyError('No {} backend available'.format(key.upper()))
+        self.writer_key, self.writer = key, backend
 
     @staticmethod
     def _validate_sql_config(config: dict) -> bool:
@@ -221,13 +231,28 @@ class EloSystem:
 
     def load_configs(self, configs: dict | None = None, sql_config: dict | None = None, csv_config: dict | None = None, league_config: dict | None = None) -> bool:
         if isinstance(configs, dict):
-            return self._load_configs(configs)
+            loaded = self._load_configs(configs)
         else:
             self.read_league_config(league_config)
             self.read_csv_config(csv_config)
             self.read_sql_config(sql_config)
+            loaded = True
 
-        return True
+        # The backends exist only once their configs are read, so the
+        # reader/writer can only be pointed at them here.
+        self._assign_rw()
+        return loaded
+
+    def _sys_config(self) -> dict[str, Any]:
+        # The keys have to be the ones __init__ reads back, and the values the
+        # backend *names* -- writing self.reader would serialise the object.
+        return {
+            'reader': self.reader_key,
+            'writer': self.writer_key,
+            'csv_config_name': self.csv_config_loc,
+            'elo_league_config_name': self.elo_league_config_loc,
+            'sql_config_name': self.sql_config_loc,
+        }
 
     def write_configs(self, which: str | list[str]) -> None:
         if isinstance(which, list):
@@ -235,13 +260,7 @@ class EloSystem:
                 self.write_configs(i)
         else:
             if which == 'sys':
-                write_config_file(self.pathed_config, {
-                            'reader': self.reader,
-                            'writer': self.writer,
-                            'csv_config_loc': self.csv_config_loc,
-                            'elo_league_config_loc': self.elo_league_config_loc,
-                            'sql_config_loc': self.sql_config_loc,
-                })
+                write_config_file(self.pathed_config, self._sys_config())
             elif which == 'csv':
                 write_config_file(Path(self.configs_dir, self.csv_config_loc), self.csv_config)
             elif which == 'sql':
@@ -251,13 +270,7 @@ class EloSystem:
 
 
     def dump(self) -> dict[str, Any]:
-        res = {'sys': {
-                    'reader': self.reader,
-                    'writer': self.writer,
-                    'csv_config_loc': self.csv_config_loc,
-                    'elo_league_config_loc': self.elo_league_config_loc,
-                    'sql_config_loc': self.sql_config_loc,
-        }}
+        res = {'sys': self._sys_config()}
         if self.elo_league_config is not None:
             if len(self.elo_league_config):
                 res.update({'league': self.elo_league_config})

@@ -643,3 +643,14 @@ def test_sync_dims_needs_no_elo_frames(tmp_path, monkeypatch):
 
     assert es.elo_league.frame_manager is None
     assert es.elo_sql.syncs == 1
+
+
+def test_load_frames_works_before_any_season_has_run(league):
+    # Restoring ratings from a backend is a valid first move; only run_prep
+    # otherwise builds the frame manager.
+    assert league.frame_manager is None
+    frame = pd.DataFrame({'week_0': [1500.0] * len(MEMBERS)}, index=MEMBERS)
+    league.load_frames({'seasonal_elo': {2024: frame}})
+
+    assert league.frame_manager is not None
+    pd.testing.assert_frame_equal(league.frame_manager.seasonal_elo[2024], frame)

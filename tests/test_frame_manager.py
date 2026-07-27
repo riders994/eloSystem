@@ -381,3 +381,11 @@ def test_validate_load_frame_rejects_non_week_columns():
         index=['alice', 'bob'],
     )
     assert FrameManager._validate_load_frame(frame) is False
+
+
+def test_generated_week_zero_is_float():
+    # The SQL backend stores elo as double precision, so a seeded frame has to
+    # come out with the same dtype a loaded one does.
+    fm = FrameManager(make_config())
+    fm.generate(2024)
+    assert fm.seasonal_elo[2024]['week_0'].dtype == 'float64'
