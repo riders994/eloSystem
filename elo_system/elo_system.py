@@ -127,7 +127,8 @@ class EloSystem:
             self.elo_sql = EloSQL(
                 self.sql_config,
                 self.elo_league_config,
-                connector
+                connector,
+                self.resources_dir
             )
 
     def _get_elo_sql(self):

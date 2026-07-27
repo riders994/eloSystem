@@ -26,8 +26,10 @@ schema: fantasy_sports
 anonymizer: true
 
 # Where the reversal maps are written — one JSON file per dim (anon_manager.json,
-# anon_team.json ...). Defaults to the working directory. Loading needs these
-# files, so keep them: without them a read comes back with token names.
+# anon_team.json ...). Defaults to resources/anon. A relative path is read the
+# same way, from the resources directory; an absolute one is used as given.
+# Loading needs these files, so keep them: without them a read comes back with
+# token names. They hold the real values, so resources/ is gitignored.
 # anon_loc: anon
 
 # Which columns are tokenised, and the category each is named under. Columns

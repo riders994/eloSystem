@@ -15,6 +15,7 @@ from .basics import (
     ANON_COLS,
     ANON_MAP_FSTR,
     ANON_MEMBER_COL,
+    DEFAULT_ANON_DIR,
     ELO_DIMS,
     FACT_SPECS,
     LOAD_QUERIES
@@ -141,6 +142,7 @@ class EloSQL(DataBase):
             config: dict,
             league_config: dict | None = None,
             connector: psycopg2.extensions.connection | None = None,
+            working_directory: Path | None = None,
     ) -> None:
         super().__init__(
             config
@@ -167,7 +169,13 @@ class EloSQL(DataBase):
         # always carry real values, and the tokens exist only in the DB. So it
         # has to be configured before the first pull.
         self.anonymized = bool(config.get('anonymizer', False))
-        self.anon_loc = Path(config.get('anon_loc', '.'))
+        # Maps default under the resources directory, next to the rest of the
+        # local data; a relative anon_loc is read the same way, and an absolute
+        # one wins outright.
+        self.wd = Path(working_directory) if working_directory is not None else Path('.')
+        self.anon_loc = Path(config.get('anon_loc', DEFAULT_ANON_DIR))
+        if not self.anon_loc.is_absolute():
+            self.anon_loc = self.wd / self.anon_loc
         self.anon_cols: dict[str, dict[str, str]] = {
             dim: dict(cols) for dim, cols in ANON_COLS.items()
         }

@@ -20,6 +20,7 @@ from .constants import (
     ANON_MAP_FSTR,
     ANON_MEMBER_COL,
     APPROVED_SQL_FLAVORS,
+    DEFAULT_ANON_DIR,
     DYNASTY_DB_COLS,
     ELO_DIM_COLS,
     ELO_DIMS,

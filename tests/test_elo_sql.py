@@ -4,6 +4,8 @@ No real database is touched: a fake connector stands in for the psycopg2
 connection, pandas' read path is monkeypatched to serve in-memory dim tables,
 and the write helpers record what they were handed instead of executing SQL.
 """
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -817,3 +819,45 @@ def test_anon_columns_config_extends_the_defaults(db, tmp_path):
     # Untouched columns still go out as themselves.
     assert set(teams['platform_team_id']) == {'t1', 't2', 't3'}
     assert set(obj._dim('team')['team_name']) == {'Nate FC', 'Abe FC'}
+
+
+# ---------------------------------------------------------------------------
+# where the reversal maps live
+# ---------------------------------------------------------------------------
+
+def test_anon_maps_default_under_the_working_directory(db, tmp_path):
+    obj = EloSQL({'conn_dict': VALID_CONN, 'anonymizer': True},
+                 LEAGUE_CONFIG, FakeConn(), tmp_path)
+    assert obj.anon_loc == tmp_path / 'anon'
+
+    obj.sync_dims()
+    assert (tmp_path / 'anon' / 'anon_manager.json').exists()
+
+
+def test_relative_anon_loc_resolves_against_the_working_directory(db, tmp_path):
+    obj = EloSQL({'conn_dict': VALID_CONN, 'anonymizer': True, 'anon_loc': 'secrets'},
+                 LEAGUE_CONFIG, FakeConn(), tmp_path)
+    assert obj.anon_loc == tmp_path / 'secrets'
+
+
+def test_absolute_anon_loc_wins(db, tmp_path):
+    elsewhere = tmp_path / 'elsewhere'
+    obj = EloSQL({'conn_dict': VALID_CONN, 'anonymizer': True,
+                  'anon_loc': str(elsewhere)},
+                 LEAGUE_CONFIG, FakeConn(), tmp_path)
+    assert obj.anon_loc == elsewhere
+
+
+def test_without_a_working_directory_maps_stay_relative(db):
+    obj = make_elosql(db, {'conn_dict': VALID_CONN, 'anonymizer': True}, LEAGUE_CONFIG)
+    assert obj.anon_loc == Path('anon')
+
+
+def test_elo_system_points_the_maps_at_resources(db, tmp_path, monkeypatch):
+    from elo_system.elo_system import EloSystem
+
+    monkeypatch.chdir(tmp_path)
+    es = EloSystem()
+    es.set_elo_sql({'conn_dict': VALID_CONN, 'anonymizer': True}, FakeConn())
+
+    assert es.elo_sql.anon_loc == tmp_path / 'resources' / 'anon'

@@ -74,6 +74,11 @@ ANON_MEMBER_COL = 'display_name'
 
 ANON_MAP_FSTR = 'anon_{dim}.json'
 
+# Where the reversal maps go by default, relative to the resources directory.
+# They hold the real values, so they belong with the rest of the local data
+# rather than wherever the process happened to be started.
+DEFAULT_ANON_DIR = 'anon'
+
 # Maps each publish destination (the payload keys FrameManager emits) onto the
 # fact table it lands in, the column that scopes a publish/load to one league or
 # season, and the column the rating itself is stored under.
