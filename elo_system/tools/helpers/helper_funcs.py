@@ -10,6 +10,37 @@ from urllib.parse import urlparse, urlunparse
 from ..basics.constants import APPROVED_SQL_FLAVORS, WEEK_STR
 
 
+def insert_generator(
+    schema: str,
+    table: str,
+    entry: dict[str, str]
+):
+    """
+    Generates an insert query for a single row to avoid pandas overhead unless necessary
+    
+    :param schema:
+    :param table:
+    :param entry:
+    :return:
+    """
+    query_str = 'INSERT INTO {schema}.{table} ({columns}) VALUES ('
+    for k in entry.keys():
+        query_str += '{' + k + '}'
+    query_str += ');'
+    return query_str.format(schema=schema, table=table, columns=", ".join(entry.keys()), **entry)
+
+def _row_records(df: pd.DataFrame) -> List[tuple]:
+    """Row tuples ready for execute_values.
+
+    Casting through object first turns numpy scalars into Python ones --
+    psycopg2 adapts numpy.float64 (a float subclass) but not numpy.int64 --
+    and every NaN/NaT becomes None so it lands as a SQL NULL.
+    """
+    return [
+        tuple(None if pd.isna(v) else v for v in row)
+        for row in df.astype(object).itertuples(index=False, name=None)
+    ]
+
 def upsert_dataframe(
     conn: psycopg2.extensions.connection,
     df: pd.DataFrame,
@@ -70,13 +101,68 @@ def upsert_dataframe(
         {conflict_action}
     """
 
-    records = [
-        tuple(None if pd.isna(v) else v for v in row)
-        for row in df.itertuples(index=False, name=None)
-    ]
+    records = _row_records(df)
 
     with conn.cursor() as cur:
         execute_values(cur, sql, records)
+    conn.commit()
+
+    return len(records)
+
+def replace_dataframe(
+    conn: psycopg2.extensions.connection,
+    df: pd.DataFrame,
+    table: str,
+    scope_column: str,
+    scope_value: Any,
+    schema: str = "public",
+) -> int:
+    """
+    Replace one league's (or one season's) rows in a fact table with `df`.
+
+    Every existing row where `scope_column` = `scope_value` is deleted and the
+    DataFrame is inserted in its place, in a single transaction. The fact_
+    tables carry no unique constraint, so `upsert_dataframe`'s ON CONFLICT
+    target has nothing to match against; a scoped delete + insert is what keeps
+    a re-publish idempotent instead.
+
+    Args:
+        conn:          An open psycopg2 connection.
+        df:            DataFrame whose columns match the target table.
+        table:         Target table name.
+        scope_column:  Column identifying the rows this publish owns.
+        scope_value:   Value of `scope_column` for this publish.
+        schema:        Postgres schema (default: "public").
+
+    Returns:
+        Number of rows inserted.
+
+    Raises:
+        ValueError: If `scope_column` is not present in the DataFrame.
+        psycopg2.Error: On any database error; the connection is not closed by this function.
+    """
+    if scope_column not in df.columns:
+        raise ValueError(f"scope_column not found in DataFrame: {scope_column}")
+
+    def quote(name: str) -> str:
+        return f'"{name}"'
+
+    qualified_table = f"{quote(schema)}.{quote(table)}"
+    col_list = ", ".join(quote(c) for c in df.columns)
+
+    records = _row_records(df)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM {qualified_table} WHERE {quote(scope_column)} = %s",
+            (scope_value,),
+        )
+        if records:
+            execute_values(
+                cur,
+                f"INSERT INTO {qualified_table} ({col_list}) VALUES %s",
+                records,
+            )
     conn.commit()
 
     return len(records)
@@ -190,3 +276,20 @@ def score_unpivot(df: pd.DataFrame) -> pd.DataFrame:
     wide.columns = [WEEK_STR.format(w) for w in wide.columns]
     # Match the original frames, whose member index carries no name.
     return wide.rename_axis(None)
+
+def scoreboard_pivot(df: pd.DataFrame, id_column: str = "player_id") -> pd.DataFrame:
+    """
+    Unpivot a wide stats DataFrame into long format.
+
+    Args:
+        df:        DataFrame with a player_id column and one column per statistic.
+        id_column: Name of the identifier column (default: "player_id").
+
+    Returns:
+        DataFrame with three columns: player_id, statistic, value.
+    """
+    return df.melt(
+        id_vars=[id_column],
+        var_name="statistic",
+        value_name="value",
+    )

@@ -1,16 +1,24 @@
 """Tests for elo_system.tools.basics.queries.
 
 Guards the LOAD_ELO / LOAD_ROTO SQL templates against missing or renamed
-``{}`` placeholders and against accidental edits to their table names,
-WHERE clauses and the ``rating`` alias.
+``{}`` placeholders and against accidental edits to their WHERE clause and the
+``rating`` alias. The table and the scoping column are supplied by the caller
+out of FACT_SPECS, so one template serves every elo fact table.
 """
+import string
+
 import pytest
 
-from elo_system.tools.basics.queries import LOAD_ELO, LOAD_ROTO
+from elo_system.tools.basics.constants import FACT_SPECS
+from elo_system.tools.basics.queries import LOAD_ELO, LOAD_QUERIES, LOAD_ROTO
 
 
 def norm(sql):
     return ' '.join(sql.split())
+
+
+def fields(template):
+    return {name for _, name, _, _ in string.Formatter().parse(template) if name}
 
 
 # ---------------------------------------------------------------------------
@@ -20,36 +28,32 @@ def norm(sql):
 def test_load_elo_formats_with_expected_kwargs():
     sql = LOAD_ELO.format(
         schema='fantasy_sports',
-        is_dynasty='TRUE',
-        league_id=42,
-        year_end='AND league_year = 2024',
+        table='fact_seasonal_elos',
+        scope_col='online_league_id',
+        scope_id=42,
     )
     flat = norm(sql)
-    assert 'FROM fantasy_sports.fact_elos' in flat
-    assert 'is_dynasty = TRUE' in flat
-    assert 'league_id = 42' in flat
-    assert 'AND league_year = 2024' in flat
+    assert 'FROM fantasy_sports.fact_seasonal_elos' in flat
+    assert flat.endswith('WHERE online_league_id = 42')
     # the rating alias is part of the contract for downstream score_unpivot
     assert 'elo AS rating' in flat
     assert 'team_id' in flat
     assert 'week' in flat
 
 
-def test_load_elo_year_end_optional_empty():
-    sql = LOAD_ELO.format(
-        schema='s', is_dynasty='FALSE', league_id=1, year_end=''
-    )
-    flat = norm(sql)
-    # An empty year_end must leave a well-formed WHERE clause.
-    assert flat.endswith('league_id = 1')
+def test_load_elo_serves_the_dynasty_table_too():
+    flat = norm(LOAD_ELO.format(
+        schema='s', table='fact_dynasty_elos', scope_col='league_id', scope_id=7))
+    assert 'FROM s.fact_dynasty_elos' in flat
+    assert flat.endswith('WHERE league_id = 7')
 
 
 def test_load_elo_requires_all_placeholders():
     # Missing any of the four named fields must raise (guards renames).
-    for missing in ('schema', 'is_dynasty', 'league_id', 'year_end'):
+    for missing in ('schema', 'table', 'scope_col', 'scope_id'):
         kwargs = {
-            'schema': 's', 'is_dynasty': 'TRUE',
-            'league_id': 1, 'year_end': '',
+            'schema': 's', 'table': 'fact_seasonal_elos',
+            'scope_col': 'online_league_id', 'scope_id': 1,
         }
         del kwargs[missing]
         with pytest.raises(KeyError):
@@ -57,12 +61,7 @@ def test_load_elo_requires_all_placeholders():
 
 
 def test_load_elo_has_exactly_expected_fields():
-    import string
-    fields = {
-        name for _, name, _, _ in string.Formatter().parse(LOAD_ELO)
-        if name
-    }
-    assert fields == {'schema', 'is_dynasty', 'league_id', 'year_end'}
+    assert fields(LOAD_ELO) == {'schema', 'table', 'scope_col', 'scope_id'}
 
 
 # ---------------------------------------------------------------------------
@@ -72,35 +71,50 @@ def test_load_elo_has_exactly_expected_fields():
 def test_load_roto_formats_with_expected_kwargs():
     sql = LOAD_ROTO.format(
         schema='fantasy_sports',
-        league_id=7,
-        year_end='AND league_year = 2023',
+        table='fact_rotos',
+        scope_col='online_league_id',
+        scope_id=7,
     )
     flat = norm(sql)
     assert 'FROM fantasy_sports.fact_rotos' in flat
-    assert 'league_id = 7' in flat
-    assert 'AND league_year = 2023' in flat
+    assert flat.endswith('WHERE online_league_id = 7')
     assert 'score AS rating' in flat
     assert 'team_id' in flat
     assert 'week' in flat
 
 
 def test_load_roto_requires_all_placeholders():
-    for missing in ('schema', 'league_id', 'year_end'):
-        kwargs = {'schema': 's', 'league_id': 1, 'year_end': ''}
+    for missing in ('schema', 'table', 'scope_col', 'scope_id'):
+        kwargs = {
+            'schema': 's', 'table': 'fact_rotos',
+            'scope_col': 'online_league_id', 'scope_id': 1,
+        }
         del kwargs[missing]
         with pytest.raises(KeyError):
             LOAD_ROTO.format(**kwargs)
 
 
 def test_load_roto_has_exactly_expected_fields():
-    import string
-    fields = {
-        name for _, name, _, _ in string.Formatter().parse(LOAD_ROTO)
-        if name
-    }
-    assert fields == {'schema', 'league_id', 'year_end'}
+    assert fields(LOAD_ROTO) == {'schema', 'table', 'scope_col', 'scope_id'}
 
 
 def test_load_roto_does_not_filter_on_is_dynasty():
     # fact_rotos has no is_dynasty column; the template must not reference it.
     assert 'is_dynasty' not in LOAD_ROTO
+
+
+# ---------------------------------------------------------------------------
+# LOAD_QUERIES
+# ---------------------------------------------------------------------------
+
+def test_load_queries_are_keyed_by_the_value_column():
+    # EloSQL._load_scoped picks its template by spec['value'], so every fact
+    # spec must have a query keyed under it.
+    assert LOAD_QUERIES == {'elo': LOAD_ELO, 'score': LOAD_ROTO}
+    for spec in FACT_SPECS.values():
+        assert spec['value'] in LOAD_QUERIES
+
+
+def test_load_queries_alias_their_value_column_to_rating():
+    for value, template in LOAD_QUERIES.items():
+        assert '{} AS rating'.format(value) in norm(template)

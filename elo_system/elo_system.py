@@ -1,3 +1,5 @@
+import psycopg2
+
 from typing import Any
 from pathlib import Path
 
@@ -113,13 +115,39 @@ class EloSystem:
             return False
         return True
 
-    def read_sql_config(self, config: dict | None) -> None:
-        if config is None:
-            config = load_config_file(Path(self.configs_dir, self.sql_config_loc))
+    def _set_elo_sql(
+            self,
+            config: dict,
+            connector: psycopg2.extensions.connection | None = None,
+            league_id: int = -1,
+            league_name: str | None = None
+    ):
         if self._validate_sql_config(config):
             self.sql_config = config
-            self.elo_sql = EloSQL(self.sql_config)
-            self._assign_rw()
+            self.elo_sql = EloSQL(
+                self.sql_config,
+                self.elo_league_config,
+                connector
+            )
+
+    def _get_elo_sql(self):
+        config = load_config_file(Path(self.configs_dir, self.sql_config_loc))
+        self._set_elo_sql(config)
+
+    def set_elo_sql(
+            self,
+            config: dict,
+            connector: psycopg2.extensions.connection,
+            league_id: int = -1,
+            league_name: str | None = None
+    ):
+        self._set_elo_sql(config, connector, league_id, league_name)
+
+    def read_sql_config(self, config: dict | None) -> None:
+        if config is None:
+            self._get_elo_sql()
+        else:
+            self._set_elo_sql(config)
 
     @staticmethod
     def _validate_csv_config(config: dict) -> bool:
@@ -127,13 +155,38 @@ class EloSystem:
             return False
         return True
 
-    def read_csv_config(self, config: dict | None) -> None:
-        if config is None:
-            config = load_config_file(Path(self.configs_dir, self.csv_config_loc))
+    def _set_elo_csv(
+            self,
+            config: dict,
+            spath: str | None = None,
+    ):
+        if spath is None:
+            path = self.configs_dir.parent
+        else:
+            path = str_to_path(spath)
         if self._validate_csv_config(config):
             self.csv_config = config
-            self.elo_csv = EloCSV(self.csv_config, self.configs_dir.parent)
-            self._assign_rw()
+            self.elo_csv = EloCSV(
+                self.csv_config,
+                path
+            )
+
+    def set_elo_csv(
+            self,
+            config: dict,
+            spath: str
+    ):
+        self._set_elo_csv(config, spath)
+
+    def _get_elo_csv(self):
+        config = load_config_file(Path(self.configs_dir, self.csv_config_loc))
+        self._set_elo_csv(config)
+
+    def read_csv_config(self, config: dict | None) -> None:
+        if config is None:
+            self._get_elo_csv()
+        else:
+            self._set_elo_csv(config)
 
     @staticmethod
     def _validate_league_config(config: dict) -> bool:
@@ -157,21 +210,21 @@ class EloSystem:
         for k, v in configs.items():
             if k not in CONFIGS:
                 raise KeyError(k)
-            if k == 'sql':
-                self.read_sql_config(v)
+            if k in {'elo', 'league'}:
+                self.read_league_config(v)
             elif k == 'csv':
                 self.read_csv_config(v)
-            elif k in {'elo', 'league'}:
-                self.read_league_config(v)
+            elif k == 'sql':
+                self.read_sql_config(v)
         return True
 
     def load_configs(self, configs: dict | None = None, sql_config: dict | None = None, csv_config: dict | None = None, league_config: dict | None = None) -> bool:
         if isinstance(configs, dict):
             return self._load_configs(configs)
         else:
+            self.read_league_config(league_config)
             self.read_csv_config(csv_config)
             self.read_sql_config(sql_config)
-            self.read_league_config(league_config)
 
         return True
 
@@ -225,7 +278,7 @@ class EloSystem:
         if isinstance(self.reader, EloCSV):
             frames = self.reader.load_frames(frame_set)
         elif isinstance(self.reader, EloSQL):
-            frames = self.reader.load_frames(self.elo_league.config, frame_set)
+            frames = self.reader.load_frames(frame_set)
         self.elo_league.load_frames(frames)
 
     def set_lid(self):

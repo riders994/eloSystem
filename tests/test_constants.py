@@ -11,21 +11,40 @@ import elo_system.tools.basics.constants as constants
 
 def test_elo_dims_value_and_type():
     assert isinstance(constants.ELO_DIMS, set)
-    assert constants.ELO_DIMS == {'league', 'manager', 'team'}
+    assert constants.ELO_DIMS == {'league', 'manager', 'online_league', 'team'}
 
 
-def test_elo_cols_value_and_type():
-    assert isinstance(constants.ELO_COLS, list)
-    assert constants.ELO_COLS == [
+def test_elo_dim_cols_cover_every_dim():
+    assert set(constants.ELO_DIM_COLS) == constants.ELO_DIMS
+    for dim, cols in constants.ELO_DIM_COLS.items():
+        # Each dim leads with its own surrogate key.
+        assert cols[0] == '{}_id'.format(dim)
+
+
+def test_rating_db_cols_is_the_seasonal_column_list():
+    assert isinstance(constants.RATING_DB_COLS, list)
+    assert constants.RATING_DB_COLS == [
         'team_id',
-        'league_id',
-        'league_year',
+        'online_league_id',
         'manager_id',
         'manager_name',
-        'is_dynasty',
         'week',
         'elo',
     ]
+
+
+def test_dynasty_db_cols_hang_off_the_league_not_the_season():
+    # Dynasty elos span seasons, so they carry league_id where the seasonal
+    # table carries online_league_id.
+    assert constants.DYNASTY_DB_COLS == [
+        'team_id',
+        'league_id',
+        'manager_id',
+        'manager_name',
+        'week',
+        'elo',
+    ]
+    assert 'online_league_id' not in constants.DYNASTY_DB_COLS
 
 
 def test_approved_sql_flavors():
@@ -40,18 +59,34 @@ def test_week_str_and_playoff_start():
 
 
 def test_roto_db_cols_is_the_column_list():
-    # elo_data.EloSQL._roto_frame_prep uses ROTO_DB_COLS as a list of column
-    # names to select, so the active definition must be the list.
+    # elo_data.EloSQL projects onto ROTO_DB_COLS before writing, so the active
+    # definition must be the list.
     assert isinstance(constants.ROTO_DB_COLS, list)
     assert constants.ROTO_DB_COLS == [
         'team_id',
-        'league_id',
-        'league_year',
+        'online_league_id',
         'manager_id',
         'manager_name',
         'week',
         'score',
     ]
+
+
+def test_fact_specs_cover_every_publish_destination():
+    assert set(constants.FACT_SPECS) == {'dynasty_elo', 'seasonal_elo', 'roto_history'}
+    for spec in constants.FACT_SPECS.values():
+        assert spec['table'].startswith('fact_')
+        assert spec['scope'] in spec['columns']
+        assert spec['value'] == spec['columns'][-1]
+
+
+def test_fact_specs_point_each_destination_at_its_own_table():
+    tables = {name: spec['table'] for name, spec in constants.FACT_SPECS.items()}
+    assert tables == {
+        'dynasty_elo': 'fact_dynasty_elos',
+        'seasonal_elo': 'fact_seasonal_elos',
+        'roto_history': 'fact_rotos',
+    }
 
 
 def test_roto_cols_is_the_category_set():

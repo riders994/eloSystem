@@ -118,7 +118,7 @@ def test_validate_conn_dict_none_required_field(key):
 
 def test_validate_conn_dict_disallowed_flavor():
     d = _valid_dict()
-    d['conn_dict'] = 'mysql'  # not in APPROVED_SQL_FLAVORS
+    d['dialect'] = 'mysql'  # not in APPROVED_SQL_FLAVORS
     assert validate_conn_dict(d) is False
 
 

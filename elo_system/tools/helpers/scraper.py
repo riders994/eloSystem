@@ -15,6 +15,7 @@ class LeagueScraper(LeagueBase, ABC):
     """
 
     def __init__(self, config: dict) -> None:
+        self.standings = dict()
         self.league_id = None
         self.league_wrapper = None
         self.managers = dict()
@@ -42,7 +43,10 @@ class LeagueScraper(LeagueBase, ABC):
     @abstractmethod
     def get_members(self) -> dict[str, Any]:
         """Return the canonical member map keyed by stable owner id:
-        {owner_id: {'team_id', 'curr_name', 'curr_short', 'commish'}}."""
+        {owner_id: {'team_id', 'curr_name', 'curr_short', 'commish', 'standing'}}.
+
+        'standing' is the team's current season standing rank (int), or None
+        if the team is not present in the standings table."""
         raise NotImplementedError
 
     @abstractmethod
@@ -73,6 +77,7 @@ class FantraxScraper(LeagueScraper):
     def login(self) -> ft.League:
         self.load()
         self.league_wrapper = ft.League(league_id=self.league_id)
+        self.standings = self.league_wrapper.standings()
         self.scoring_periods = self.league_wrapper.scoring_period_results()
         return self.league_wrapper
 
@@ -93,12 +98,14 @@ class FantraxScraper(LeagueScraper):
             return PLAYOFF_START
 
     def get_members(self) -> dict[str, Any]:
+        rank_by_team = {record.team.id: rank for rank, record in self.standings.ranks.items()}
         return {
             team.owners: {
                 'team_id': team.id,
                 'curr_name': team.name,
                 'curr_short': team.short,
                 'commish': team.commissioner,
+                'standing': rank_by_team.get(team.id, 100),
             } for team in self.league_wrapper.teams
         }
 

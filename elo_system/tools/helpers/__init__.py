@@ -4,6 +4,7 @@ from .frame_manager import FrameManager
 from .league import League, FantraxLeague
 from .helper_funcs import (
     fstr_matcher,
+    replace_dataframe,
     score_pivot,
     score_unpivot,
     upsert_dataframe,

@@ -89,9 +89,6 @@ class DataBase:
     ) -> None:
 
         self.seasons_by = config.get('seasons_by', 'year')
-        self.dynasty_fstr = config.get('dynasty_fstr', 'dynasty_elo{ext}')
-        self.elo_fstr = config.get('elo_fstr', '{num}_season_elo{ext}')
-        self.roto_fstr = config.get('roto_fstr', '{num}_roto_elo{ext}')
 
     def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
         pass

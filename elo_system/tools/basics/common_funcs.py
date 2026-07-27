@@ -1,11 +1,24 @@
 import json
 import yaml
+import string
+import random
 
 import numpy as np
 import pandas as pd
 
 from pathlib import Path
 
+
+BIGINT_MAX = 2**63 - 1
+BIGINT_MIN = -(2**63)
+
+
+def id_generator(size=8, chars=string.ascii_uppercase + string.digits) -> str:
+    return ''.join(random.choice(chars) for _ in range(size))
+
+def bigint_generator(min:int = 0) -> int:
+    min = max(min, BIGINT_MIN)
+    return random.randint(min, BIGINT_MAX)
 
 def elo_share(elo):
     return np.power(10, elo / 400)

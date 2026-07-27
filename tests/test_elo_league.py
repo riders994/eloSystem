@@ -528,9 +528,11 @@ def test_validate_league_config_requires_core_keys():
         assert EloSystem._validate_league_config(partial) is False
 
 
-def test_validate_sql_config_currently_permissive():
-    # SQL validation is a placeholder that accepts anything for now.
-    assert EloSystem._validate_sql_config({}) is True
+def test_validate_sql_config_requires_connection_details():
+    # EloSQL cannot be built without either form of connection details.
+    assert EloSystem._validate_sql_config({}) is False
+    assert EloSystem._validate_sql_config({'conn_dict': {}}) is True
+    assert EloSystem._validate_sql_config({'conn_uri': 'postgresql://x/y'}) is True
 
 
 def test_constructor_loads_config_from_path(tmp_path):
