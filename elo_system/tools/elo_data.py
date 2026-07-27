@@ -245,7 +245,29 @@ class EloSQL(DataBase):
         combined = new if existing.empty else pd.concat([existing, new])
         # Staged rows may omit nullable columns; keep the table's own column
         # order so the eventual insert lines up with it.
-        self.dim_tables[table] = combined.reindex(columns=existing.columns)
+        combined = combined.reindex(columns=existing.columns)
+        # An omitted column arrives as all-NA float64, which a later update
+        # cannot write a string or a bool into. Object is both what psycopg2
+        # hands back for an all-NULL column and what accepts either.
+        for column in combined.columns:
+            if combined[column].isna().all():
+                combined[column] = combined[column].astype(object)
+        self.dim_tables[table] = combined
+
+    def _update_dim(self, dim: str, rows: list[dict[str, Any]]) -> None:
+        """Refresh the columns a sync owns on rows that already exist.
+
+        Only the columns named in `rows` are touched, and a None among them
+        means nothing was scraped for it, so whatever is stored survives. Every
+        other column -- the ones the Discord side owns -- is never written here.
+        """
+        if not rows:
+            return
+        table = self._dim_table(dim)
+        updates = pd.DataFrame.from_records(rows).set_index(self._dim_key(dim))
+        # DataFrame.update propagates only non-NA values, which is exactly the
+        # 'nothing scraped, keep what is stored' rule.
+        self.dim_tables[table].update(updates)
 
     # ------------------------------------------------------------------
     # league config
@@ -353,70 +375,224 @@ class EloSQL(DataBase):
         return {year: self.add_league_year(year) for year in sorted(self.seasons)}
 
     def _ensure_managers(self) -> dict[str, int]:
-        """One dim_manager row per league member, stored under the platform
-        owner name the frames are indexed by."""
+        """One dim_manager row per league member.
+
+        The member key is the platform owner name, which is what display_name
+        holds -- so that, not player_name, is what identifies a manager here and
+        what the load path reads the frame index back out of. player_name and
+        discord_id belong to the Discord side; they are seeded with placeholder
+        ids and never written again, so whatever Discord sets there survives
+        every later sync.
+        """
         managers = self._dim('manager')
-        by_name: dict[str, int] = {}
+        by_owner: dict[str, int] = {}
         if not managers.empty:
-            by_name.update({
-                name: int(mid) for name, mid
-                in zip(managers['player_name'], managers['manager_id'])
+            by_owner.update({
+                owner: int(mid) for owner, mid
+                in zip(managers['display_name'], managers['manager_id'])
             })
 
         rows = []
         next_id = self._next_dim_id('manager')
         for year in sorted(self.seasons):
-            for member, info in self._members(year).items():
-                if member in by_name:
+            for member in self._members(year):
+                if member in by_owner:
                     continue
-                by_name[member] = next_id
+                by_owner[member] = next_id
                 rows.append({
                     'manager_id': next_id,
-                    'player_name': member,
-                    'display_name': info.get('short_name', member),
-                    'discord_id': None,
+                    'player_name': id_generator(),
+                    'display_name': member,
+                    'discord_id': id_generator(),
                     'is_comanager': False,
                 })
                 next_id += 1
         self._append_dim('manager', rows)
-        return by_name
+        return by_owner
+
+    def _scraped_team_cols(self, info: dict[str, Any], manager_id: int) -> dict[str, Any]:
+        """The dim_team columns the platform is the source of truth for.
+
+        is_champion and comanager_id are deliberately absent: a standing of 1
+        mid-season is not a champion, and co-manager links come from Discord.
+        """
+        return {
+            'team_name': info.get('curr_name'),
+            'manager_id': manager_id,
+            'is_commish': info.get('is_commish', False),
+            'place_finish': info.get('standing'),
+        }
 
     def _ensure_teams(self, online_league_ids: dict[Any, int], manager_ids: dict[str, int]) -> None:
-        """One dim_team row per (season, platform team id)."""
-        teams = self._dim('team')
-        known = set()
-        if not teams.empty:
-            known.update(zip(teams['online_league_id'], teams['platform_team_id']))
+        """One dim_team row per (season, platform team id).
 
-        rows = []
+        New teams are inserted; teams already on file have their scraped
+        columns refreshed, so a rename, a handover or a moved standing lands
+        without disturbing anything else on the row.
+        """
+        teams = self.dim_tables[self._dim_table('team')]
+        existing: dict[tuple, int] = {}
+        if not teams.empty:
+            existing.update({
+                (online_league_id, platform_team_id): int(team_id)
+                for team_id, online_league_id, platform_team_id
+                in zip(teams.index, teams['online_league_id'], teams['platform_team_id'])
+            })
+
+        new_rows = []
+        updated_rows = []
         next_id = self._next_dim_id('team')
         for year in sorted(self.seasons):
             online_league_id = online_league_ids[year]
             for member, info in self._members(year).items():
                 platform_team_id = str(info.get('team_id'))
-                if (online_league_id, platform_team_id) in known:
-                    continue
-                known.add((online_league_id, platform_team_id))
-                rows.append({
-                    'team_id': next_id,
-                    'team_name': info.get('curr_name'),
-                    'manager_id': manager_ids[member],
-                    'online_league_id': online_league_id,
-                    'platform_team_id': platform_team_id,
-                    'league_year': year,
-                    'is_commish': info.get('is_commish', False),
-                })
-                next_id += 1
-        self._append_dim('team', rows)
+                scraped = self._scraped_team_cols(info, manager_ids[member])
+                team_id = existing.get((online_league_id, platform_team_id))
+                if team_id is None:
+                    new_rows.append({
+                        'team_id': next_id,
+                        'online_league_id': online_league_id,
+                        'platform_team_id': platform_team_id,
+                        'league_year': year,
+                        **scraped,
+                    })
+                    existing[(online_league_id, platform_team_id)] = next_id
+                    next_id += 1
+                else:
+                    updated_rows.append({'team_id': team_id, **scraped})
+        self._update_dim('team', updated_rows)
+        self._append_dim('team', new_rows)
 
     def sync_dims(self) -> None:
-        """Create whatever dim rows the league config implies, then push them so
-        the fact-table foreign keys have something to resolve against."""
+        """Bring the dim tables in line with the league config, then push them.
+
+        Runs on its own -- a newly scraped season's members and teams can be
+        registered before any elos exist for them -- and publish() calls it
+        first so the fact-table foreign keys always have something to resolve
+        against.
+        """
         self._ensure_league()
         online_league_ids = self._ensure_online_leagues()
         manager_ids = self._ensure_managers()
         self._ensure_teams(online_league_ids, manager_ids)
         self.push_dims()
+
+    # ------------------------------------------------------------------
+    # columns the sync does not own
+    # ------------------------------------------------------------------
+
+    def resolve_manager_id(self, member: str) -> int | None:
+        """The dim_manager id for a league member, by platform owner name."""
+        managers = self._dim('manager')
+        if managers.empty:
+            return None
+        matched = managers[managers['display_name'] == member]
+        if matched.empty:
+            return None
+        return int(matched['manager_id'].max())
+
+    def resolve_team_id(self, year: Any, member: str) -> int | None:
+        """The dim_team id for one member's team in one season."""
+        online_league_id = self._online_league_id(year)
+        if online_league_id is None:
+            return None
+        info = self._members(year).get(member)
+        if info is None:
+            return None
+        teams = self._dim('team')
+        if teams.empty:
+            return None
+        matched = teams[
+            (teams['online_league_id'] == online_league_id)
+            & (teams['platform_team_id'] == str(info.get('team_id')))
+        ]
+        if matched.empty:
+            return None
+        return int(matched['team_id'].max())
+
+    def _set_team_column(self, team_id: int, column: str, value: Any, push: bool) -> int:
+        table = self.dim_tables[self._dim_table('team')]
+        if team_id not in table.index:
+            raise KeyError('No dim_team row with team_id {}'.format(team_id))
+        # Object dtype takes a clear-to-None as readily as a value, whatever
+        # the column happened to arrive as.
+        table[column] = table[column].astype(object)
+        table.loc[team_id, column] = value
+        if push:
+            self._push_dim('team')
+        return team_id
+
+    def set_champion(
+            self,
+            year: Any,
+            member: str | None = None,
+            team_id: int | None = None,
+            is_champion: bool | None = True,
+            push: bool = True,
+    ) -> int:
+        """Flag (or clear) a team as a season's champion.
+
+        sync_dims never writes is_champion -- a standing of 1 mid-season is not
+        a champion -- so this is how the season's result gets recorded, once it
+        is actually decided.
+
+        Args:
+            year:        Season the team played in.
+            member:      League member owning the team; ignored if team_id is given.
+            team_id:     Address the dim_team row directly instead.
+            is_champion: True, False, or None to clear.
+            push:        Write the dim back to the DB straight away.
+
+        Returns:
+            The dim_team id that was written.
+
+        Raises:
+            KeyError: If the team cannot be resolved, or is not on file.
+        """
+        if team_id is None:
+            team_id = self.resolve_team_id(year, member)
+        if team_id is None:
+            raise KeyError('No team on file for {} in {}'.format(member, year))
+        return self._set_team_column(team_id, 'is_champion', is_champion, push)
+
+    def set_comanager(
+            self,
+            year: Any,
+            member: str | None = None,
+            comanager: str | int | None = None,
+            team_id: int | None = None,
+            push: bool = True,
+    ) -> int:
+        """Point a team at its co-manager, or clear the link.
+
+        sync_dims never writes comanager_id, since co-manager links come from
+        the Discord side rather than from anything the platform reports.
+
+        Args:
+            year:      Season the team played in.
+            member:    League member owning the team; ignored if team_id is given.
+            comanager: The co-manager's platform owner name, their manager_id,
+                       or None to clear the link.
+            team_id:   Address the dim_team row directly instead.
+            push:      Write the dim back to the DB straight away.
+
+        Returns:
+            The dim_team id that was written.
+
+        Raises:
+            KeyError: If the team or the co-manager cannot be resolved.
+        """
+        if team_id is None:
+            team_id = self.resolve_team_id(year, member)
+        if team_id is None:
+            raise KeyError('No team on file for {} in {}'.format(member, year))
+
+        comanager_id = comanager
+        if isinstance(comanager, str):
+            comanager_id = self.resolve_manager_id(comanager)
+            if comanager_id is None:
+                raise KeyError('No manager on file for {}'.format(comanager))
+        return self._set_team_column(team_id, 'comanager_id', comanager_id, push)
 
     # ------------------------------------------------------------------
     # publishing
@@ -471,9 +647,11 @@ class EloSQL(DataBase):
         teams = teams.sort_values('team_id').drop_duplicates(
             subset=['platform_team_id', 'league_year'], keep='last'
         )
+        # display_name is the platform owner name the frames are indexed by, so
+        # it is both the join key and what the denormalised manager_name gets.
         managers = managers.sort_values('manager_id').drop_duplicates(
-            subset='player_name', keep='last'
-        ).rename(columns={'player_name': 'manager_name'})
+            subset='display_name', keep='last'
+        ).rename(columns={'display_name': 'manager_name'})
 
         keyed = long.merge(member_teams, on=['member', 'league_year'], how='inner')
         keyed = keyed.merge(
@@ -540,9 +718,9 @@ class EloSQL(DataBase):
 
     def _load_post_proc(self, frame: pd.DataFrame) -> pd.DataFrame:
         """Fact rows carry surrogate team ids; the frames want the member back,
-        which is the manager's platform name over in dim_manager."""
+        which is the platform owner name held in dim_manager.display_name."""
         teams = self._dim('team')[['team_id', 'manager_id']].dropna()
-        managers = self._dim('manager')[['manager_id', 'player_name']].dropna(subset='manager_id')
+        managers = self._dim('manager')[['manager_id', 'display_name']].dropna(subset='manager_id')
         if teams.empty or managers.empty:
             return pd.DataFrame(columns=['member', 'week', 'rating'])
 
@@ -556,7 +734,7 @@ class EloSQL(DataBase):
             managers,
             on='manager_id',
             how='inner'
-        ).rename(columns={'player_name': 'member'})[['member', 'week', 'rating']]
+        ).rename(columns={'display_name': 'member'})[['member', 'week', 'rating']]
 
     def _load_scoped(self, destination: str, scope_id: int) -> pd.DataFrame | None:
         spec = FACT_SPECS[destination]

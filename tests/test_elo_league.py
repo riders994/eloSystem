@@ -570,3 +570,76 @@ def test_constructor_none_bootstraps_directory_skeleton(tmp_path, monkeypatch):
     # No sys config on disk yet -> defaults apply.
     assert es.reader_key == 'csv'
     assert es.csv_config_loc == 'csv_config.yml'
+
+
+# ---------------------------------------------------------------------------
+# EloSystem.sync_dims
+# ---------------------------------------------------------------------------
+
+class RecordingEloSQL:
+    """Stands in for EloSQL; records what the dim sync flow hands it."""
+
+    def __init__(self):
+        self.configs = []
+        self.syncs = 0
+
+    def set_league_config(self, league_config):
+        self.configs.append(league_config)
+        return 0
+
+    def sync_dims(self):
+        self.syncs += 1
+
+
+def make_system_with_sql(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ell_mod, 'FantraxLeague', make_fake_league_cls(build_scoreboards()))
+
+    es = EloSystem()
+    es.elo_league_config = make_league_config()
+    es.elo_league = EloLeague(es.elo_league_config)
+    es.elo_sql = RecordingEloSQL()
+    return es
+
+
+def test_sync_dims_without_a_sql_writer_raises(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    es = EloSystem()
+    with pytest.raises(KeyError, match='No SQL writer available'):
+        es.sync_dims()
+
+
+def test_sync_dims_scrapes_every_season_then_syncs(tmp_path, monkeypatch):
+    es = make_system_with_sql(tmp_path, monkeypatch)
+    es.sync_dims()
+
+    # Every configured season is re-scraped before the dims are written.
+    assert sorted(l.year for l in ell_mod.FantraxLeague.created) == [2024, 2025]
+    assert es.elo_sql.syncs == 1
+    assert set(es.elo_sql.configs[0]['seasons']) == {2024, 2025}
+
+
+def test_sync_dims_can_skip_the_scrape(tmp_path, monkeypatch):
+    es = make_system_with_sql(tmp_path, monkeypatch)
+    es.sync_dims(scrape=False)
+
+    assert ell_mod.FantraxLeague.created == []
+    assert es.elo_sql.syncs == 1
+
+
+def test_sync_dims_scrapes_only_the_years_asked_for(tmp_path, monkeypatch):
+    es = make_system_with_sql(tmp_path, monkeypatch)
+    es.sync_dims(years=[2025])
+
+    assert [l.year for l in ell_mod.FantraxLeague.created] == [2025]
+    assert es.elo_sql.syncs == 1
+
+
+def test_sync_dims_needs_no_elo_frames(tmp_path, monkeypatch):
+    # The whole point of the standalone flow: register a season's members and
+    # teams before any elos exist for it.
+    es = make_system_with_sql(tmp_path, monkeypatch)
+    es.sync_dims()
+
+    assert es.elo_league.frame_manager is None
+    assert es.elo_sql.syncs == 1

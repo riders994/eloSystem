@@ -128,6 +128,19 @@ def make_elosql(db, config=None, league_config=None):
     return EloSQL(config, league_config, connector=FakeConn())
 
 
+def _config_with(year, owner, team='t1', **member_fields):
+    """A one-season, one-member config, for exercising the sync's update pass."""
+    info = {'team_id': team, 'curr_name': 'Nate FC', 'short_name': 'NAT',
+            'is_commish': True}
+    info.update(member_fields)
+    return {
+        'platform': 'fantrax',
+        'current_sports_year': year,
+        'seasons': {year: {'league_id': f'plat{year}', 'current_season_length': 1,
+                           'league_members': {owner: info}}},
+    }
+
+
 def _frame(members, weeks, base=1500.0):
     return pd.DataFrame(
         {f'week_{w}': [base + w] * len(members) for w in range(weeks)},
@@ -264,9 +277,41 @@ def test_sync_dims_creates_one_manager_per_member(db):
     obj.sync_dims()
 
     managers = obj._dim('manager')
+    # The member key is the platform owner name, which lives in display_name;
     # 'Nate' plays both seasons but is one manager.
-    assert sorted(managers['player_name']) == ['Nate', 'abrieff']
+    assert sorted(managers['display_name']) == ['Nate', 'abrieff']
     assert list(managers['is_comanager']) == [False, False]
+
+
+def test_sync_dims_seeds_the_discord_owned_manager_fields(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    managers = obj._dim('manager')
+    # player_name and discord_id belong to Discord; seed them with generated
+    # ids rather than NULL so the row is complete until Discord fills them in.
+    assert managers['player_name'].notna().all()
+    assert managers['discord_id'].notna().all()
+    assert set(managers['player_name']) & set(managers['display_name']) == set()
+
+
+def test_sync_dims_never_overwrites_discord_owned_manager_fields(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    # Stand in for the Discord side filling the real values in.
+    managers = obj.dim_tables['dim_manager']
+    managers.loc[managers['display_name'] == 'Nate', 'player_name'] = 'Nathan Real'
+    managers.loc[managers['display_name'] == 'Nate', 'discord_id'] = '99887766'
+    managers.loc[managers['display_name'] == 'Nate', 'is_comanager'] = True
+
+    obj.sync_dims()
+
+    nate = obj._dim('manager')
+    nate = nate[nate['display_name'] == 'Nate'].iloc[0]
+    assert nate['player_name'] == 'Nathan Real'
+    assert nate['discord_id'] == '99887766'
+    assert nate['is_comanager'] is True or nate['is_comanager'] == True  # noqa: E712
 
 
 def test_sync_dims_creates_one_team_per_season_and_platform_team(db):
@@ -298,6 +343,161 @@ def test_sync_dims_pushes_every_dim(db):
     obj = make_elosql(db, league_config=LEAGUE_CONFIG)
     obj.sync_dims()
     assert {table for table, _ in db.upserts} == set(DIM_COLUMNS)
+
+
+def test_sync_dims_takes_place_finish_from_the_scraped_standing(db):
+    config = _config_with(2024, 'Nate', standing=3)
+    obj = make_elosql(db, league_config=config)
+    obj.sync_dims()
+
+    teams = obj._dim('team')
+    nate = teams[(teams['league_year'] == 2024) & (teams['platform_team_id'] == 't1')]
+    assert nate['place_finish'].iloc[0] == 3
+
+
+def test_sync_dims_refreshes_scraped_team_columns(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+    before = obj._dim('team')
+    team_ids = set(before['team_id'])
+
+    # Same platform team, renamed and finished the season.
+    renamed = _config_with(2024, 'Nate', curr_name='Nate United', standing=1,
+                           is_commish=False)
+    obj.set_league_config(renamed)
+    obj.sync_dims()
+
+    teams = obj._dim('team')
+    nate = teams[(teams['league_year'] == 2024) & (teams['platform_team_id'] == 't1')]
+    assert nate['team_name'].iloc[0] == 'Nate United'
+    assert nate['place_finish'].iloc[0] == 1
+    assert bool(nate['is_commish'].iloc[0]) is False
+    # Refreshed in place -- no second row, no new surrogate id.
+    assert len(nate) == 1
+    assert set(obj._dim('team')['team_id']) == team_ids
+
+
+def test_sync_dims_preserves_columns_it_does_not_own(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    teams = obj.dim_tables['dim_team']
+    target = teams['platform_team_id'] == 't1'
+    teams.loc[target, 'is_champion'] = True
+    teams.loc[target, 'comanager_id'] = 1
+
+    obj.sync_dims()
+
+    teams = obj._dim('team')
+    nate = teams[teams['platform_team_id'] == 't1'].iloc[0]
+    assert bool(nate['is_champion']) is True
+    assert nate['comanager_id'] == 1
+
+
+def test_sync_dims_keeps_a_stored_standing_when_none_is_scraped(db):
+    obj = make_elosql(db, league_config=_config_with(2024, 'Nate', standing=2))
+    obj.sync_dims()
+
+    # A mid-scrape config with no standing must not blank the stored one.
+    obj.set_league_config(_config_with(2024, 'Nate'))
+    obj.sync_dims()
+
+    teams = obj._dim('team')
+    assert teams[teams['platform_team_id'] == 't1']['place_finish'].iloc[0] == 2
+
+
+def test_sync_dims_follows_a_team_changing_hands(db):
+    obj = make_elosql(db, league_config=_config_with(2024, 'Nate'))
+    obj.sync_dims()
+    before = obj._dim('manager')
+    nate_id = before[before['display_name'] == 'Nate']['manager_id'].iloc[0]
+
+    # Same platform team id, different owner the following scrape.
+    obj.set_league_config(_config_with(2024, 'abrieff'))
+    obj.sync_dims()
+
+    managers = obj._dim('manager')
+    abrieff_id = managers[managers['display_name'] == 'abrieff']['manager_id'].iloc[0]
+    assert abrieff_id != nate_id
+    teams = obj._dim('team')
+    assert teams[teams['platform_team_id'] == 't1']['manager_id'].iloc[0] == abrieff_id
+
+
+# ---------------------------------------------------------------------------
+# columns the sync does not own
+# ---------------------------------------------------------------------------
+
+def test_set_champion_flags_the_teams_row(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    team_id = obj.set_champion(2024, 'Nate')
+
+    teams = obj._dim('team').set_index('team_id')
+    assert bool(teams.loc[team_id, 'is_champion']) is True
+    # Nobody else was touched.
+    assert teams.drop(index=team_id)['is_champion'].isna().all()
+
+
+def test_set_champion_can_clear_and_survives_a_resync(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+    obj.set_champion(2024, 'Nate')
+    obj.sync_dims()
+
+    teams = obj._dim('team')
+    assert bool(teams[teams['platform_team_id'] == 't1']['is_champion'].iloc[0]) is True
+
+    obj.set_champion(2024, 'Nate', is_champion=False)
+    teams = obj._dim('team')
+    assert bool(teams[teams['platform_team_id'] == 't1']['is_champion'].iloc[0]) is False
+
+
+def test_set_comanager_resolves_the_owner_name_to_a_manager_id(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    team_id = obj.set_comanager(2024, 'Nate', 'abrieff')
+
+    teams = obj._dim('team').set_index('team_id')
+    assert teams.loc[team_id, 'comanager_id'] == obj.resolve_manager_id('abrieff')
+
+
+def test_set_comanager_accepts_an_id_and_clears_with_none(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+    abrieff = obj.resolve_manager_id('abrieff')
+
+    team_id = obj.set_comanager(2024, 'Nate', abrieff)
+    teams = obj._dim('team').set_index('team_id')
+    assert teams.loc[team_id, 'comanager_id'] == abrieff
+
+    obj.set_comanager(2024, 'Nate', None)
+    teams = obj._dim('team').set_index('team_id')
+    assert teams.loc[team_id, 'comanager_id'] is None
+
+
+def test_setters_push_the_dim_by_default(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+    db.upserts.clear()
+
+    obj.set_champion(2024, 'Nate')
+    assert [table for table, _ in db.upserts] == ['dim_team']
+
+    db.upserts.clear()
+    obj.set_comanager(2024, 'Nate', 'abrieff', push=False)
+    assert db.upserts == []
+
+
+def test_setters_raise_on_an_unknown_team_or_comanager(db):
+    obj = make_elosql(db, league_config=LEAGUE_CONFIG)
+    obj.sync_dims()
+
+    with pytest.raises(KeyError, match='No team on file'):
+        obj.set_champion(2024, 'stranger')
+    with pytest.raises(KeyError, match='No manager on file'):
+        obj.set_comanager(2024, 'Nate', 'stranger')
 
 
 def test_add_league_year_returns_existing_season(db):

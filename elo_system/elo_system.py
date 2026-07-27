@@ -270,6 +270,34 @@ class EloSystem:
 
         return res
 
+    def sync_dims(self, years: list[int] | None = None, scrape: bool = True) -> None:
+        """Register the configured seasons' members and teams in the SQL dims.
+
+        Runs independently of publish(), so a season can have its managers and
+        teams put on file before any elos exist for it. Pass scrape=False to
+        sync from the league config as it stands instead of re-scraping.
+
+        Args:
+            years:  Seasons to sync; every configured season by default.
+            scrape: Re-scrape each season first, so renames, handovers and
+                    standings are current before the dims are written.
+        """
+        if self.elo_sql is None:
+            raise KeyError('No SQL writer available')
+
+        if self.elo_league is not None:
+            if not self.elo_league.loaded:
+                self.elo_league.load()
+            if years is None:
+                years = list(self.elo_league.seasons.keys())
+            if scrape:
+                for year in years:
+                    self.elo_league.add_league(year, overwrite=True)
+            self.elo_league_config = self.elo_league.dump()
+
+        self.elo_sql.set_league_config(self.elo_league_config)
+        self.elo_sql.sync_dims()
+
     def publish(self):
         payload = self.elo_league.publish()
         self.writer.publish(payload)
