@@ -152,6 +152,7 @@ def test_scrape_populates_season_length_playoffs_and_members(patched_ft, teams):
         'short_name': first.short,
         'team_id': first.id,
         'is_commish': True,
+        'standing': 1,
     }
 
     # scrape() returns the dumped config
@@ -182,6 +183,37 @@ def test_scrape_updates_existing_member_and_keeps_name_history(patched_ft, teams
     assert info['short_name'] == first.short
     assert info['team_id'] == first.id
     assert info['is_commish'] is True
+
+
+def test_scrape_stores_the_standing_for_every_member(patched_ft, teams):
+    league = FantraxLeague(YEAR, make_year_config())
+    league.scrape()
+
+    # make_standings ranks the mock teams in order, 1-based.
+    standings = {owner: info['standing']
+                 for owner, info in league.league_members.items()}
+    assert standings == {team.owners: rank
+                         for rank, team in enumerate(teams, 1)}
+
+
+def test_scrape_refreshes_the_standing_of_an_existing_member(patched_ft, teams):
+    first = teams[0]
+    existing = {
+        first.owners: {
+            'curr_name': 'Original Name',
+            'names': ['Original Name'],
+            'short_name': 'OLD',
+            'team_id': 'oldteamid',
+            'is_commish': False,
+            'standing': 100,
+        }
+    }
+    league = FantraxLeague(YEAR, make_year_config(league_members=existing))
+    league.scrape()
+
+    # The stale placeholder is replaced by the scraped rank, so a finished
+    # season's place_finish reaches the dims on the next sync.
+    assert league.league_members[first.owners]['standing'] == 1
 
 
 def test_set_overrides_take_explicit_values(patched_ft):

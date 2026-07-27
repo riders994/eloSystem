@@ -70,6 +70,7 @@ class League(LeagueBase):
                     'short_name': member_info['curr_short'],
                     'team_id': member_info['team_id'],
                     'is_commish': member_info['commish'],
+                    'standing': member_info['standing'],
                 }
             })
 
@@ -87,6 +88,7 @@ class League(LeagueBase):
                 'short_name': member_info['curr_short'],
                     'team_id': member_info['team_id'],
                     'is_commish': member_info['commish'],
+                    'standing': member_info['standing'],
             })
             if overwrite:
                 old_info.update({
