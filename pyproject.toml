@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "elo-system"
-version = "2.0.0"
+version = "2.0.1"
 description = "Elo rating system for fantasy sports leagues (Fantrax NBA and Sleeper NFL, with multi-season dynasty support)."
 readme = "README.md"
 requires-python = ">=3.10"

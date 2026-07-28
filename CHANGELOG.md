@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-07-28
+
+A publishable 2.0.0. The 2.0.0 upload to PyPI was broken and has been deleted,
+but PyPI reserves a version's filenames permanently once they have been
+uploaded -- deleting the release does not free the number -- so the same code
+has to ship under a new one. See [2.0.0] below for what the release contains.
+
+### Changed
+- Each package `__init__.py` declares `__all__`, naming the re-exports it exists
+  to provide. `from elo_system.tools.basics import *` now yields exactly that
+  list rather than every name the module happened to bind, and pyflakes stops
+  reading a re-export as an unused import -- 52 false positives that would have
+  buried a real one. Lint is clean from here, as `CONTRIBUTING.md` asks.
+
 ## [2.0.0] - 2026-07-27
 
 Sleeper football, the rating maths that supporting it turned up, and a data
@@ -307,7 +321,8 @@ SQL backend is additive and will land as minor releases.
 - The Postgres backend (`EloSQL`, `upsert_dataframe`) is scaffolded but not
   yet connected to the pipeline.
 
-[Unreleased]: https://github.com/riders994/eloSystem/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/riders994/eloSystem/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/riders994/eloSystem/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/riders994/eloSystem/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/riders994/eloSystem/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/riders994/eloSystem/releases/tag/v1.0.0
