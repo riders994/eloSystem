@@ -202,6 +202,9 @@ def test_get_members_keyed_by_owner_with_team_details(monkeypatch):
         'team_id': first.id,
         'curr_name': first.name,
         'curr_short': first.short,
+        # Fantrax has no account handle beyond the owner name, which is already
+        # the key, so the account shows under that.
+        'display_name': first.owners,
         'commish': True,
         'standing': 1,
     }
@@ -331,6 +334,8 @@ def test_sleeper_get_members_shape(monkeypatch):
         'team_id': '1',
         'curr_name': 'Alpha Team',
         'curr_short': 'alpha',
+        # The account's own handle, distinct here from the team's name.
+        'display_name': 'alpha',
         'commish': True,
         'standing': 1,
     }

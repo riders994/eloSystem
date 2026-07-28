@@ -29,12 +29,12 @@ def test_load_elo_formats_with_expected_kwargs():
     sql = LOAD_ELO.format(
         member_col='team_id',
         schema='fantasy_sports',
-        table='fact_seasonal_elos',
+        table='fact_elos',
         scope_col='online_league_id',
         scope_id=42,
     )
     flat = norm(sql)
-    assert 'FROM fantasy_sports.fact_seasonal_elos' in flat
+    assert 'FROM fantasy_sports.fact_elos' in flat
     assert flat.endswith('WHERE online_league_id = 42')
     # the rating alias is part of the contract for downstream score_unpivot
     assert 'elo AS rating' in flat
@@ -58,7 +58,7 @@ def test_load_elo_requires_all_placeholders():
     # Missing any of the four named fields must raise (guards renames).
     for missing in ('member_col', 'schema', 'table', 'scope_col', 'scope_id'):
         kwargs = {
-            'member_col': 'team_id', 'schema': 's', 'table': 'fact_seasonal_elos',
+            'member_col': 'team_id', 'schema': 's', 'table': 'fact_elos',
             'scope_col': 'online_league_id', 'scope_id': 1,
         }
         del kwargs[missing]

@@ -26,3 +26,13 @@ current_sports_year: 2025
 # seasons:
 #   2023: {league_id: '920833359809437696'}
 #   2024: {league_id: '1063131085976006656'}
+
+# A season may name its own platform, overriding the league's. That is how a
+# league that moved keeps one identity across the move: the same league, with one
+# platform recorded per season, and each season's members resolved against the
+# accounts they played under that year.
+#
+# platform: fantrax
+# seasons:
+#   2024: {league_id: blk3bn3clw9njuhc}
+#   2025: {league_id: '1196653288641003520', platform: sleeper}

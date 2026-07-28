@@ -26,20 +26,30 @@ schema: fantasy_sports
 anonymizer: true
 
 # Where the reversal maps are written — one JSON file per dim (anon_manager.json,
-# anon_team.json ...). Defaults to resources/anon. A relative path is read the
-# same way, from the resources directory; an absolute one is used as given.
+# anon_manager_platform.json, anon_team.json ...). Defaults to resources/anon. A
+# relative path is read the same way, from the resources directory; an absolute
+# one is used as given.
 # Loading needs these files, so keep them: without them a read comes back with
 # token names. They hold the real values, so resources/ is gitignored.
 # anon_loc: anon
 
 # Which columns are tokenised, and the category each is named under. Columns
 # sharing a category share tokens, which is how a manager reads the same in
-# dim_manager as in the fact tables' manager_name.
-# Defaults to the manager identity:
+# dim_manager_platform as in the fact tables' manager_name.
+#
+# Defaults to the identity columns, split the way the schema splits them —
+# dim_manager is the person, dim_manager_platform is the account they play under
+# on one platform:
 #
 #   manager:
-#     display_name: manager   # the platform owner name the frames are keyed by
-#     player_name: person     # the real name the Discord side sets
+#     player_name: person          # the real name the Discord side sets
+#   manager_platform:
+#     platform_user_id: account    # the account id the frames are keyed by
+#     display_name: manager        # the name that account shows under
+#
+# platform_user_id and display_name get a category each because they are
+# different value spaces; on Fantrax the account id *is* the owner's name, which
+# is why it is tokenised at all.
 #
 # Anything set here is merged over that default, e.g. to cover team names too:
 # anon_columns:

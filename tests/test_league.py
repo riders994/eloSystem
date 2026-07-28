@@ -150,6 +150,9 @@ def test_scrape_populates_season_length_playoffs_and_members(patched_ft, teams):
         'curr_name': first.name,
         'names': [first.name],
         'short_name': first.short,
+        # The account's own name, carried through so the SQL side can file the
+        # member under it in dim_manager_platform.
+        'display_name': first.owners,
         'team_id': first.id,
         'is_commish': True,
         'standing': 1,

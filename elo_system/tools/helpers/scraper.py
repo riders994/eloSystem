@@ -43,7 +43,12 @@ class LeagueScraper(LeagueBase, ABC):
     @abstractmethod
     def get_members(self) -> dict[str, Any]:
         """Return the canonical member map keyed by stable owner id:
-        {owner_id: {'team_id', 'curr_name', 'curr_short', 'commish', 'standing'}}.
+        {owner_id: {'team_id', 'curr_name', 'curr_short', 'display_name',
+        'commish', 'standing'}}.
+
+        'display_name' is what the *account* is called on the platform, as
+        against 'curr_name'/'curr_short', which name the team. It is the account
+        a person plays under, so it is what dim_manager_platform stores.
 
         'standing' is the team's current season standing rank (int), or None
         if the team is not present in the standings table."""
@@ -112,6 +117,9 @@ class FantraxScraper(LeagueScraper):
                 'team_id': team.id,
                 'curr_name': team.name,
                 'curr_short': team.short,
+                # Fantrax has no account handle beyond the owner name, which is
+                # already the key -- so the account shows under that.
+                'display_name': team.owners,
                 'commish': team.commissioner,
                 'standing': rank_by_team.get(team.id, 100),
             } for team in self.league_wrapper.teams
@@ -239,6 +247,9 @@ class SleeperScraper(LeagueScraper):
                 # Sleeper only stores a team name once the manager sets one.
                 'curr_name': metadata.get('team_name') or user['display_name'],
                 'curr_short': user['display_name'],
+                # Sleeper accounts carry a handle of their own, distinct from
+                # whatever the manager has named their team.
+                'display_name': user['display_name'],
                 # is_owner is None rather than False for most members.
                 'commish': bool(user.get('is_owner')),
                 'standing': self.standings.get(team_id, 100),

@@ -13,12 +13,15 @@ from .basics import (
     bigint_generator,
     id_generator,
     ANON_COLS,
+    ANON_FACT_NAME_COL,
     ANON_MAP_FSTR,
-    ANON_MEMBER_COL,
+    ANON_MEMBER_DIM,
     DEFAULT_ANON_DIR,
+    ELO_DIM_KEYS,
     ELO_DIM_ORDER,
     ELO_DIMS,
     FACT_SPECS,
+    LEAGUE_MANAGER_SPEC,
     LOAD_QUERIES
 )
 from .helpers import (
@@ -147,17 +150,26 @@ class EloSQL(DataBase):
     in the shape EloCSV returns, so the two are interchangeable as EloSystem's
     reader and writer.
 
-    The frames are indexed by league member -- the platform owner account name
-    -- while the schema keys off surrogate ids. ``league_members`` in the league
-    config bridges the two: it maps each member to the platform team id that
-    identifies their ``dim_team`` row for a season, and each member is also a
-    ``dim_manager`` row under ``display_name``, which is what the load path
-    reads the index back out of.
+    The frames are indexed by league member -- the id of the account that member
+    plays under on the platform -- while the schema keys off surrogate ids.
+    ``league_members`` in the league config bridges the two: it maps each member
+    to the platform team id that identifies their ``dim_team`` row for a season,
+    and each member is a ``dim_manager_platform`` row under
+    ``platform_user_id``, which is what the load path reads the index back out
+    of.
+
+    That row is the join between an account and the *person* holding it, which is
+    the ``dim_manager`` row behind it. One person can hold an account on each
+    platform and play in any number of leagues across any number of Discord
+    servers, so a member already on file from another league is matched on
+    ``(platform, platform_user_id)`` and reuses their existing ``manager_id``
+    rather than being minted again. Which leagues a manager turns out to be in
+    is recorded in ``mvw_fact_league_managers``.
 
     With ``anonymizer`` set in the config, names are tokenised at the storage
     boundary: the dim tables held here always carry real values, tokens exist
     only in the DB, and the reversal maps live under ``anon_loc``. Which columns
-    that covers is ``anon_columns``, defaulting to the manager identity.
+    that covers is ``anon_columns``, defaulting to the platform identity.
     """
 
     def __init__(
@@ -250,21 +262,40 @@ class EloSQL(DataBase):
         return 'dim_{}'.format(dim)
 
     @staticmethod
-    def _dim_key(dim: str) -> str:
-        return '{}_id'.format(dim)
+    def _dim_keys(dim: str) -> list[str]:
+        """The dim's key columns, which is what its upsert conflicts on."""
+        return list(ELO_DIM_KEYS.get(dim, ('{}_id'.format(dim),)))
+
+    @classmethod
+    def _dim_key(cls, dim: str) -> str | None:
+        """The dim's surrogate id, or None if it has a natural composite key.
+
+        Only a single-column key is ours to mint, and only such a dim is held
+        indexed by it -- a composite key belongs to the platform, so there is no
+        id to generate and nothing to index on.
+        """
+        keys = cls._dim_keys(dim)
+        return keys[0] if len(keys) == 1 else None
 
     def _dim_frame(self, dim: str) -> pd.DataFrame:
         """The cached dim table, pulled from the DB the first time it is read.
 
         Every dim access goes through here, which is what keeps construction
         offline: nothing is fetched until something actually needs a row.
+
+        Indexed by its surrogate id where it has one; a composite-key dim comes
+        back with every key column still a column.
         """
         self._pull_dim(dim, False)
         return self.dim_tables[self._dim_table(dim)]
 
     def _dim(self, dim: str) -> pd.DataFrame:
-        """The cached dim table with its surrogate id back as a column."""
-        return self._dim_frame(dim).reset_index()
+        """The cached dim table with every key back as a column."""
+        frame = self._dim_frame(dim)
+        if self._dim_key(dim) is None:
+            # Already flat; reset_index would only add its RangeIndex as a column.
+            return frame.copy()
+        return frame.reset_index()
 
     # ------------------------------------------------------------------
     # anonymisation
@@ -292,16 +323,16 @@ class EloSQL(DataBase):
     def _anonymize_dim(self, dim: str, frame: pd.DataFrame) -> pd.DataFrame:
         """Tokenise a dim on its way to the DB, writing the reversal map.
 
-        Rows go out ordered by surrogate id so a token keeps meaning the same
-        row from one publish to the next: anonymize() numbers per call, so
-        anything that reordered the frame would silently repoint every token.
+        Rows go out ordered by key so a token keeps meaning the same row from one
+        publish to the next: anonymize() numbers per call, so anything that
+        reordered the frame would silently repoint every token.
         """
         columns = self._anon_cols(dim)
         if not columns:
             return frame
         self.anon_loc.mkdir(parents=True, exist_ok=True)
         return anonymize(
-            frame.sort_values(self._dim_key(dim)),
+            frame.sort_values(self._dim_keys(dim)),
             columns,
             self._anon_map_path(dim),
         )
@@ -331,12 +362,12 @@ class EloSQL(DataBase):
             mapping = json.load(handle)
         return {value: token for token, value in mapping.get(category, dict()).items()}
 
-    def _member_tokens(self) -> dict[Any, Any]:
-        """Tokens for the member identity, keyed by the real member name."""
-        category = self._anon_cols('manager').get(ANON_MEMBER_COL)
+    def _fact_name_tokens(self) -> dict[Any, Any]:
+        """Tokens for the name the facts denormalise, keyed by the real name."""
+        category = self._anon_cols(ANON_MEMBER_DIM).get(ANON_FACT_NAME_COL)
         if category is None:
             return dict()
-        return self.anon_tokens('manager', category)
+        return self.anon_tokens(ANON_MEMBER_DIM, category)
 
     # ------------------------------------------------------------------
     # dimension tables
@@ -349,6 +380,8 @@ class EloSQL(DataBase):
                 return True
         # read_sql_table requires a SQLAlchemy connectable; self.conn is a raw
         # psycopg2 connection, so query explicitly like the load methods do.
+        # index_col is None for a composite-key dim, which leaves its key columns
+        # where they are.
         self.dim_tables.update({table: pd.read_sql_query(
             f'SELECT * FROM {self.schema}.{table}', self.conn, index_col=self._dim_key(dim)
         )})
@@ -369,14 +402,14 @@ class EloSQL(DataBase):
         return self.pull_dims(overwrite=True)
 
     def _push_dim(self, dim: str) -> bool:
-        frame = self._dim_frame(dim)
+        frame = self._dim(dim)
         if frame.empty:
             return True
         upsert_dataframe(
             self.conn,
-            self._anonymize_dim(dim, frame.reset_index()),
+            self._anonymize_dim(dim, frame),
             self._dim_table(dim),
-            [self._dim_key(dim)],
+            self._dim_keys(dim),
             self.schema
         )
         return True
@@ -399,6 +432,8 @@ class EloSQL(DataBase):
     def _next_dim_id(self, dim: str) -> int:
         # The dim tables carry no sequence defaults, so surrogate ids are minted
         # here off whatever the cached table already holds.
+        if self._dim_key(dim) is None:
+            raise KeyError('dim_{} has no surrogate id to mint'.format(dim))
         index = self._dim_frame(dim).index
         if len(index) == 0:
             return 0
@@ -409,8 +444,16 @@ class EloSQL(DataBase):
             return
         table = self._dim_table(dim)
         existing = self._dim_frame(dim)
-        new = pd.DataFrame.from_records(rows).set_index(self._dim_key(dim))
+        new = pd.DataFrame.from_records(rows)
+        if (key := self._dim_key(dim)) is not None:
+            new = new.set_index(key)
         combined = new if existing.empty else pd.concat([existing, new])
+        if key is None:
+            # No index to collide on, so a re-staged natural key would otherwise
+            # go in twice and the upsert would conflict with itself.
+            combined = combined.drop_duplicates(
+                subset=self._dim_keys(dim), keep='last'
+            ).reset_index(drop=True)
         # Staged rows may omit nullable columns; keep the table's own column
         # order so the eventual insert lines up with it.
         combined = combined.reindex(columns=existing.columns)
@@ -431,12 +474,24 @@ class EloSQL(DataBase):
         """
         if not rows:
             return
-        self._dim_frame(dim)
+        existing = self._dim_frame(dim)
         table = self._dim_table(dim)
-        updates = pd.DataFrame.from_records(rows).set_index(self._dim_key(dim))
-        # DataFrame.update propagates only non-NA values, which is exactly the
-        # 'nothing scraped, keep what is stored' rule.
-        self.dim_tables[table].update(updates)
+        keys = self._dim_keys(dim)
+        # One row can be staged by several seasons -- an account, or a team that
+        # never changed hands -- and update() rejects a duplicated key outright.
+        # The newest season is staged last, so that is the one to keep.
+        updates = pd.DataFrame.from_records(rows).drop_duplicates(
+            subset=keys, keep='last'
+        )
+        # DataFrame.update aligns on the index, so a composite-key dim has to be
+        # keyed up for the call and flattened again afterwards.
+        if self._dim_key(dim) is None:
+            columns = list(existing.columns)
+            keyed = existing.set_index(keys)
+            keyed.update(updates.set_index(keys))
+            self.dim_tables[table] = keyed.reset_index().reindex(columns=columns)
+        else:
+            existing.update(updates.set_index(keys[0]))
 
     # ------------------------------------------------------------------
     # league config
@@ -459,8 +514,32 @@ class EloSQL(DataBase):
         self.current_sports_year = self.league_config.get('current_sports_year')
         self._league_id_stale = True
 
-    def _platform_league_ids(self) -> set[str]:
-        return {s['league_id'] for s in self.seasons.values() if s.get('league_id')}
+    def _season_platform(self, year: Any) -> Any:
+        """Which platform a season was played on.
+
+        Defaults to the league's platform, but a season may name its own:
+        dim_online_league carries the platform per season precisely so a league
+        that moved -- Fantrax one year, Sleeper the next -- keeps a single
+        identity across the move.
+        """
+        return self.seasons.get(year, dict()).get('platform', self.platform)
+
+    def _league_platforms(self) -> list[Any]:
+        """The platforms this league has played on, newest season first."""
+        seen = []
+        for year in sorted(self.seasons, reverse=True):
+            if (platform := self._season_platform(year)) not in seen:
+                seen.append(platform)
+        if not seen and self.platform is not None:
+            seen.append(self.platform)
+        return seen
+
+    def _platform_league_ids(self) -> set[tuple]:
+        """The (platform, league id) pairs this config's seasons are known by."""
+        return {
+            (self._season_platform(year), season['league_id'])
+            for year, season in self.seasons.items() if season.get('league_id')
+        }
 
     def _lookup_league_id(self) -> int:
         """Find the dim_league row behind this config by way of any season's
@@ -468,7 +547,15 @@ class EloSQL(DataBase):
         online = self._dim('online_league')
         if online.empty:
             return -1
-        known = online[online['platform_league_id'].isin(self._platform_league_ids())]
+        # Matched on the pair rather than the id alone: a league id is only
+        # unique within its own platform, and one Discord server can run leagues
+        # on more than one.
+        pairs = self._platform_league_ids()
+        known = online[[
+            (platform, platform_league_id) in pairs
+            for platform, platform_league_id
+            in zip(online['platform'], online['platform_league_id'])
+        ]]
         if known.empty:
             return -1
         return int(known['league_id'].max())
@@ -510,24 +597,51 @@ class EloSQL(DataBase):
                 return name
         return None
 
+    def _stored_server_id(self) -> Any:
+        """The discord_server_id already on this league's row, if it has one."""
+        leagues = self._dim('league')
+        if leagues.empty:
+            return None
+        mine = leagues[leagues['league_id'] == self.league_id]
+        if mine.empty:
+            return None
+        stored = mine['discord_server_id'].iloc[-1]
+        return None if pd.isna(stored) else stored
+
     def _ensure_league(self) -> int:
         name = self._scraped_league_name()
         if self.league_id >= 0:
+            updates: dict[str, Any] = {'league_id': self.league_id}
             # An existing row may predate the scrape that learned the real name
             # -- refresh it, but never blank it back to a placeholder.
             if name and name != self.league_name:
                 self.league_name = name
-                self._update_dim('league', [{'league_id': self.league_id,
-                                             'league_name': name}])
+                updates['league_name'] = name
+            # A row left without a server id gets one now, so the column is
+            # never null. Whatever is stored is left alone: only the Discord
+            # side ever replaces a generated id with the real one.
+            if self._stored_server_id() is None:
+                updates['discord_server_id'] = self.league_config.get(
+                    'discord_server_id', bigint_generator()
+                )
+            if len(updates) > 1:
+                self._update_dim('league', [updates])
             return self.league_id
 
         self.league_id = self._next_dim_id('league')
         # A generated name only stands in until a scrape supplies the real one.
         self.league_name = name or id_generator()
+        # No platform here: a league is a community on a Discord server, and
+        # which platform it played on is a property of each of its seasons.
+        #
+        # discord_server_id is seeded with a generated id when the config has
+        # none, the same way dim_manager's Discord-owned columns are: the row
+        # stays complete, and the Discord side overwrites it with the real one.
         self._append_dim('league', [{
             'league_id': self.league_id,
-            'discord_server_id': self.league_config.get('discord_server_id', bigint_generator()),
-            'platform': self.platform,
+            'discord_server_id': self.league_config.get(
+                'discord_server_id', bigint_generator()
+            ),
             'league_name': self.league_name,
         }])
         return self.league_id
@@ -547,6 +661,7 @@ class EloSQL(DataBase):
         self._append_dim('online_league', [{
             'online_league_id': online_league_id,
             'league_id': self.league_id,
+            'platform': self._season_platform(year),
             'platform_league_id': platform_id,
             'league_year': year,
         }])
@@ -570,41 +685,87 @@ class EloSQL(DataBase):
     def _ensure_online_leagues(self) -> dict[Any, int]:
         return {year: self.add_league_year(year) for year in sorted(self.seasons)}
 
-    def _ensure_managers(self) -> dict[str, int]:
-        """One dim_manager row per league member.
+    @staticmethod
+    def _account_name(info: dict[str, Any]) -> Any:
+        """The name the platform shows an account under.
 
-        The member key is the platform owner name, which is what display_name
-        holds -- so that, not player_name, is what identifies a manager here and
-        what the load path reads the frame index back out of. player_name and
-        discord_id belong to the Discord side; they are seeded with placeholder
-        ids and never written again, so whatever Discord sets there survives
-        every later sync.
+        None when the scrape did not report one, which leaves whatever is stored
+        alone. short_name is deliberately not a fallback: on Fantrax that is the
+        *team*'s abbreviation, not anything the account is called.
         """
-        managers = self._dim('manager')
-        by_owner: dict[str, int] = {}
-        if not managers.empty:
-            by_owner.update({
-                owner: int(mid) for owner, mid
-                in zip(managers['display_name'], managers['manager_id'])
-            })
+        return info.get('display_name')
 
-        rows = []
+    def _accounts(self) -> dict[tuple, int]:
+        """manager id for every platform account on file, across every league."""
+        accounts = self._dim('manager_platform')
+        if accounts.empty:
+            return dict()
+        return {
+            (platform, str(user_id)): int(manager_id)
+            for platform, user_id, manager_id
+            in zip(accounts['platform'], accounts['platform_user_id'],
+                   accounts['manager_id'])
+        }
+
+    def _ensure_managers(self) -> dict[tuple, int]:
+        """One dim_manager row per person, one dim_manager_platform row per account.
+
+        A member is identified by the account they play under, which is what
+        league_members is keyed by, and what dim_manager_platform holds as
+        platform_user_id -- so that, not player_name, is what the load path reads
+        the frame index back out of.
+
+        dim_manager_platform spans every league in the schema, so a member who
+        already plays elsewhere -- another league, another Discord server -- is
+        matched here and keeps the manager_id they already have. Only a genuinely
+        new account mints a new person. That is the whole reason the two tables
+        are separate.
+
+        player_name and discord_id belong to the Discord side; they are seeded
+        with placeholder ids and never written again, so whatever Discord sets
+        there survives every later sync. display_name is the platform's, so it is
+        refreshed on every sync that reports one.
+
+        Returns:
+            manager id per (platform, member), spanning every account on file --
+            not just this league's.
+        """
+        by_account = self._accounts()
+
+        manager_rows = []
+        new_accounts = []
+        updated_accounts = []
         next_id = self._next_dim_id('manager')
         for year in sorted(self.seasons):
-            for member in self._members(year):
-                if member in by_owner:
+            platform = self._season_platform(year)
+            for member, info in self._members(year).items():
+                account = (platform, str(member))
+                if (manager_id := by_account.get(account)) is not None:
+                    updated_accounts.append({
+                        'manager_id': manager_id,
+                        'platform': platform,
+                        'display_name': self._account_name(info),
+                    })
                     continue
-                by_owner[member] = next_id
-                rows.append({
+                by_account[account] = next_id
+                manager_rows.append({
                     'manager_id': next_id,
                     'player_name': id_generator(),
-                    'display_name': member,
                     'discord_id': id_generator(),
-                    'is_comanager': False,
+                })
+                new_accounts.append({
+                    'manager_id': next_id,
+                    'platform': platform,
+                    'platform_user_id': str(member),
+                    # Never blank on insert, so the column always names something
+                    # -- the account id itself until a scrape knows better.
+                    'display_name': self._account_name(info) or str(member),
                 })
                 next_id += 1
-        self._append_dim('manager', rows)
-        return by_owner
+        self._append_dim('manager', manager_rows)
+        self._update_dim('manager_platform', updated_accounts)
+        self._append_dim('manager_platform', new_accounts)
+        return by_account
 
     def _scraped_team_cols(self, info: dict[str, Any], manager_id: int) -> dict[str, Any]:
         """The dim_team columns the platform is the source of truth for.
@@ -619,7 +780,7 @@ class EloSQL(DataBase):
             'place_finish': info.get('standing'),
         }
 
-    def _ensure_teams(self, online_league_ids: dict[Any, int], manager_ids: dict[str, int]) -> None:
+    def _ensure_teams(self, online_league_ids: dict[Any, int], manager_ids: dict[tuple, int]) -> None:
         """One dim_team row per (season, platform team id).
 
         New teams are inserted; teams already on file have their scraped
@@ -640,9 +801,12 @@ class EloSQL(DataBase):
         next_id = self._next_dim_id('team')
         for year in sorted(self.seasons):
             online_league_id = online_league_ids[year]
+            platform = self._season_platform(year)
             for member, info in self._members(year).items():
                 platform_team_id = str(info.get('team_id'))
-                scraped = self._scraped_team_cols(info, manager_ids[member])
+                scraped = self._scraped_team_cols(
+                    info, manager_ids[(platform, str(member))]
+                )
                 team_id = existing.get((online_league_id, platform_team_id))
                 if team_id is None:
                     new_rows.append({
@@ -659,6 +823,46 @@ class EloSQL(DataBase):
         self._update_dim('team', updated_rows)
         self._append_dim('team', new_rows)
 
+    def _league_manager_ids(self, manager_ids: dict[tuple, int]) -> list[int]:
+        """The managers this league's own seasons name.
+
+        manager_ids spans every account in the schema, so it cannot stand in for
+        this: the bridge records who is in *this* league, and a manager only in
+        some other one does not belong in it.
+        """
+        mine = {
+            manager_ids[account]
+            for year in self.seasons
+            for member in self._members(year)
+            if (account := (self._season_platform(year), str(member))) in manager_ids
+        }
+        return sorted(mine)
+
+    def _push_league_managers(self, manager_ids: dict[tuple, int]) -> int:
+        """Record which managers this league has.
+
+        The bridge is derived, so this league's rows are rewritten wholesale
+        rather than merged -- a member dropped from every season's league_members
+        should stop being in the league. There is no unique constraint for an
+        upsert to conflict on, and a scoped replace is what keeps a re-publish
+        idempotent; other leagues' rows are never touched.
+        """
+        frame = pd.DataFrame(
+            [
+                {'league_id': self.league_id, 'manager_id': manager_id}
+                for manager_id in self._league_manager_ids(manager_ids)
+            ],
+            columns=LEAGUE_MANAGER_SPEC['columns'],
+        )
+        return replace_dataframe(
+            self.conn,
+            frame,
+            LEAGUE_MANAGER_SPEC['table'],
+            LEAGUE_MANAGER_SPEC['scope'],
+            self.league_id,
+            self.schema
+        )
+
     def sync_dims(self) -> None:
         """Bring the dim tables in line with the league config, then push them.
 
@@ -672,20 +876,29 @@ class EloSQL(DataBase):
         manager_ids = self._ensure_managers()
         self._ensure_teams(online_league_ids, manager_ids)
         self.push_dims()
+        # After the dims: the bridge has foreign keys into dim_league and
+        # dim_manager, so both have to be on the DB side before it lands.
+        self._push_league_managers(manager_ids)
 
     # ------------------------------------------------------------------
     # columns the sync does not own
     # ------------------------------------------------------------------
 
-    def resolve_manager_id(self, member: str) -> int | None:
-        """The dim_manager id for a league member, by platform owner name."""
-        managers = self._dim('manager')
-        if managers.empty:
-            return None
-        matched = managers[managers['display_name'] == member]
-        if matched.empty:
-            return None
-        return int(matched['manager_id'].max())
+    def resolve_manager_id(self, member: str, platform: Any = None) -> int | None:
+        """The dim_manager id for a league member, by the account they play under.
+
+        The platform is half the identity -- platform_user_id is only unique
+        within one -- so an explicit platform is matched exactly. Left out, this
+        league's own platforms are tried newest season first, which is what
+        resolves a member of a league that has moved between them.
+        """
+        accounts = self._accounts()
+        if platform is not None:
+            return accounts.get((platform, str(member)))
+        for candidate in self._league_platforms():
+            if (manager_id := accounts.get((candidate, str(member)))) is not None:
+                return manager_id
+        return None
 
     def resolve_team_id(self, year: Any, member: str) -> int | None:
         """The dim_team id for one member's team in one season."""
@@ -804,20 +1017,74 @@ class EloSQL(DataBase):
                 return years[num]
         return num
 
+    MEMBER_TEAM_COLS = ['member', 'league_year', 'platform_team_id',
+                        'manager_id', 'manager_name']
+    MEMBER_MANAGER_COLS = ['member', 'manager_id', 'manager_name']
+
     def _member_teams(self) -> pd.DataFrame:
-        """member -> platform team id, per season, out of league_members."""
-        rows = [
-            {
-                'member': member,
-                'league_year': year,
-                'platform_team_id': str(info.get('team_id')),
+        """member -> platform team id and manager, per season, out of league_members.
+
+        The manager is resolved here rather than read off dim_team, because a
+        member is an account id and only the season settles which platform that
+        id belongs to.
+        """
+        accounts = self._dim('manager_platform')
+        resolved: dict[tuple, tuple] = {}
+        if not accounts.empty:
+            resolved = {
+                (platform, str(user_id)): (manager_id, display_name)
+                for platform, user_id, manager_id, display_name
+                in zip(accounts['platform'], accounts['platform_user_id'],
+                       accounts['manager_id'], accounts['display_name'])
             }
-            for year in self.seasons
-            for member, info in self._members(year).items()
-        ]
-        return pd.DataFrame.from_records(
-            rows, columns=['member', 'league_year', 'platform_team_id']
+
+        rows = []
+        for year in self.seasons:
+            platform = self._season_platform(year)
+            for member, info in self._members(year).items():
+                manager_id, manager_name = resolved.get(
+                    (platform, str(member)), (None, None)
+                )
+                rows.append({
+                    'member': member,
+                    'league_year': year,
+                    'platform_team_id': str(info.get('team_id')),
+                    'manager_id': manager_id,
+                    'manager_name': manager_name,
+                })
+        return pd.DataFrame.from_records(rows, columns=self.MEMBER_TEAM_COLS)
+
+    def _league_member_managers(self) -> pd.DataFrame:
+        """member -> manager across every platform this league has used.
+
+        Season-independent, so it can still name a manager for a week falling in
+        a season they did not play -- which per-season resolution cannot do, and
+        which is exactly the departed dynasty manager's case. It is also how the
+        load path gets a member back out of a manager id.
+        """
+        empty = pd.DataFrame(columns=self.MEMBER_MANAGER_COLS)
+        accounts = self._dim('manager_platform')
+        if accounts.empty:
+            return empty
+        platforms = self._league_platforms()
+        mine = accounts[accounts['platform'].isin(platforms)].dropna(subset='manager_id')
+        if mine.empty:
+            return empty
+        # Sorted so the preferred row lands last for drop_duplicates: the newest
+        # season's platform wins, which is the account a member who moved with
+        # the league plays under now.
+        rank = {platform: i for i, platform in enumerate(platforms)}
+        mine = mine.assign(_rank=mine['platform'].map(rank)).sort_values(
+            ['_rank', 'manager_id'], ascending=[False, True]
         )
+        mine = mine.rename(columns={'platform_user_id': 'member',
+                                    'display_name': 'manager_name'})
+        # Both directions have to be one-to-one: a member names one manager, and
+        # a manager comes back as one member. A person holding an account on two
+        # of this league's platforms would otherwise duplicate every fact row.
+        mine = mine.drop_duplicates(subset='member', keep='last')
+        mine = mine.drop_duplicates(subset='manager_id', keep='last')
+        return mine[self.MEMBER_MANAGER_COLS].astype({'manager_id': 'int64'})
 
     def _dynasty_week_years(self) -> dict[int, Any]:
         """Dynasty frames run one continuous week axis across every season, so
@@ -833,6 +1100,11 @@ class EloSQL(DataBase):
     def _attach_ids(self, long: pd.DataFrame, keep_teamless: bool = False) -> pd.DataFrame:
         """Resolve the member/week rows of a pivoted frame onto their dim ids.
 
+        A member is the id of an account on one platform, so it reaches the person
+        behind it through dim_manager_platform -- for the season the week falls
+        in, since that is what settles the platform. manager_id and the
+        denormalised manager_name both come from there.
+
         With keep_teamless, a member who did not play the season a week falls
         in still gets a row, carrying no team id. That is the dynasty case: a
         manager who has left keeps a rating -- it goes on regressing toward
@@ -843,40 +1115,39 @@ class EloSQL(DataBase):
         """
         member_teams = self._member_teams()
         teams = self._dim('team')
-        managers = self._dim('manager')
-        if long.empty or managers.empty:
+        if long.empty:
             return pd.DataFrame()
         if not keep_teamless and (member_teams.empty or teams.empty):
             return pd.DataFrame()
 
-        # A member can only own one team per season and a manager only holds one
-        # dim row, so collapse any historical duplicates onto the newest id.
+        # A member can only own one team per season, so collapse any historical
+        # duplicates onto the newest id.
         teams = teams.sort_values('team_id').drop_duplicates(
             subset=['platform_team_id', 'league_year'], keep='last'
         )
-        # display_name is the platform owner name the frames are indexed by, so
-        # it is both the join key and what the denormalised manager_name gets.
-        managers = managers.sort_values('manager_id').drop_duplicates(
-            subset='display_name', keep='last'
-        ).rename(columns={'display_name': 'manager_name'})
 
         how = 'left' if keep_teamless else 'inner'
         keyed = long.merge(member_teams, on=['member', 'league_year'], how=how)
         keyed = keyed.merge(
-            teams[['team_id', 'platform_team_id', 'league_year', 'manager_id', 'online_league_id']],
+            teams[['team_id', 'platform_team_id', 'league_year', 'online_league_id']],
             on=['platform_team_id', 'league_year'],
             how=how
         )
-        if keep_teamless:
-            # A teamless row came through the left joins with no manager id, so
-            # resolve it straight off the member name instead of via the team.
-            by_member = managers.set_index('manager_name')['manager_id']
-            keyed['manager_id'] = keyed['manager_id'].fillna(
-                keyed['member'].map(by_member)
-            )
-            keyed = keyed.dropna(subset='manager_id')
-            keyed['manager_id'] = keyed['manager_id'].astype('int64')
-        keyed = keyed.merge(managers[['manager_id', 'manager_name']], on='manager_id', how='inner')
+        fallback = (
+            self._league_member_managers().set_index('member')
+            if keep_teamless else pd.DataFrame()
+        )
+        if not fallback.empty:
+            # A week falling in a season this member did not play came through the
+            # left joins with no manager on it. Resolve it off the account alone:
+            # a departed manager still holds one, they just own no team under it.
+            for column in ('manager_id', 'manager_name'):
+                keyed[column] = keyed[column].fillna(
+                    keyed['member'].map(fallback[column])
+                )
+        # A member the accounts cannot place is not one of ours to publish.
+        keyed = keyed.dropna(subset='manager_id')
+        keyed['manager_id'] = keyed['manager_id'].astype('int64')
         keyed['league_id'] = self.league_id
         return keyed
 
@@ -892,10 +1163,11 @@ class EloSQL(DataBase):
             shaped['team_id'] = shaped['team_id'].astype('object').where(
                 shaped['team_id'].notna(), None
             )
-        # manager_name is a denormalised copy of the dim's member identity, so
+        # manager_name is a denormalised copy of the account's display name, so
         # it takes the token that dim's push already minted -- anonymising here
-        # would rewrite dim_manager's map and repoint every one of its tokens.
-        if (tokens := self._member_tokens()):
+        # would rewrite dim_manager_platform's map and repoint every one of its
+        # tokens.
+        if (tokens := self._fact_name_tokens()):
             shaped['manager_name'] = shaped['manager_name'].map(
                 lambda name: tokens.get(name, name)
             )
@@ -949,17 +1221,16 @@ class EloSQL(DataBase):
     # ------------------------------------------------------------------
 
     def _load_post_proc(self, frame: pd.DataFrame, member_key: str = 'team_id') -> pd.DataFrame:
-        """Fact rows carry surrogate ids; the frames want the member back,
-        which is the platform owner name held in dim_manager.display_name.
+        """Fact rows carry surrogate ids; the frames want the member back, which
+        is the account id held in dim_manager_platform.platform_user_id.
 
         Seasonal rows reach the manager through their season's team. Dynasty
         rows name the manager outright, because a departed manager's later
         weeks have no team to route through.
         """
-        managers = self._dim('manager')[['manager_id', 'display_name']].dropna(subset='manager_id')
-        if managers.empty:
+        accounts = self._league_member_managers()
+        if accounts.empty:
             return pd.DataFrame(columns=['member', 'week', 'rating'])
-        managers = managers.astype({'manager_id': 'int64'})
 
         if member_key == 'team_id':
             teams = self._dim('team')[['team_id', 'manager_id']].dropna()
@@ -971,10 +1242,10 @@ class EloSQL(DataBase):
             frame = frame.dropna(subset=member_key).astype({member_key: 'int64'})
 
         return frame.merge(
-            managers,
+            accounts[['manager_id', 'member']],
             on='manager_id',
             how='inner'
-        ).rename(columns={'display_name': 'member'})[['member', 'week', 'rating']]
+        )[['member', 'week', 'rating']]
 
     def _load_scoped(self, destination: str, scope_id: int) -> pd.DataFrame | None:
         spec = FACT_SPECS[destination]

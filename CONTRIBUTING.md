@@ -51,7 +51,10 @@ easy to cover with hand-computed expectations.
   formatter reachable from `set_formatter`, and an entry in
   `elo_league.LEAGUE_CLASSES`. `get_members` must return the canonical member
   map keyed by a *stable* owner id -- one that survives from season to season,
-  since that key is what lets a dynasty span league ids.
+  since that key is what lets a dynasty span league ids. It is also the
+  `platform_user_id` the SQL side files the member under, so it must identify an
+  account on the platform rather than a team; the account's own name goes in
+  `display_name`, separately from the team names in `curr_name`/`curr_short`.
   `FantraxScraper`/`FantraxLeague`/`fantrax_formatter` and their Sleeper
   counterparts are the two worked examples. A formatter's job is to emit a
   frame indexed by member id carrying whatever the league type's calculator

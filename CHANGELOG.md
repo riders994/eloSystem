@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] - 2026-07-27
 
-Sleeper football, and the rating maths that supporting it turned up.
+Sleeper football, the rating maths that supporting it turned up, and a data
+model that lets one person play in more than one league.
 
 `SleeperScraper`/`SleeperLeague`/`sleeper_formatter` bring Sleeper NFL leagues
 to parity with Fantrax, verified end to end against a live five-season dynasty:
@@ -23,9 +24,15 @@ manager could outrank the live league on a years-old result. Both are fixed,
 and the league average now holds at 1500 at every week of every season and
 across every dynasty boundary.
 
-The major bump is for the config layout: the CSV and SQL configs are now
-shared by every league, and per-league `elo_config.yml` becomes
-`ratings_<league>.yml`, named in `sys_config.yml` under `ratings_configs`.
+Running two leagues at once then forced the identity question. A person and the
+account they play under are now separate rows, so the same manager can appear in
+several leagues on several Discord servers and on more than one platform, and
+still be one person.
+
+The major bump is for the config layout and the star schema: the CSV and SQL
+configs are now shared by every league, per-league `elo_config.yml` becomes
+`ratings_<league>.yml` named in `sys_config.yml` under `ratings_configs`, and
+the publish path targets the refreshed dim tables.
 
 **Migrating from 1.1.0**
 
@@ -38,6 +45,16 @@ shared by every league, and per-league `elo_config.yml` becomes
   `.ratings_config` / `.ratings_config_loc`.
 - NFL ratings computed by an earlier version are wrong and should be
   recomputed; NBA ratings are unaffected.
+- The schema changes below are assumed already applied to the database; this
+  release only teaches the publish path to match them.
+- Existing `anon_manager.json` maps keep only their `person` category. The
+  `manager` category moves to `anon_manager_platform.json` and is re-minted on
+  the next publish, as is the new `account` category -- so a DB anonymised by
+  an earlier version cannot be read back by this one. Republish from CSV rather
+  than trying to reconcile the maps.
+- Re-scrape each season to populate `display_name` in `league_members`. Until
+  then it falls back to the member key, which is what Fantrax would have set
+  anyway.
 
 ### Added
 - **Sleeper backend.** `SleeperScraper` / `SleeperLeague` / `sleeper_formatter`
@@ -115,6 +132,47 @@ shared by every league, and per-league `elo_config.yml` becomes
   when a single team was rated), returning NaN for the whole league.
 
 ### Changed
+- **The SQL publish follows the refreshed data model**, which separates a person
+  from the accounts they play under so one manager can be in several leagues on
+  several Discord servers.
+
+  `dim_manager` is now the person alone (`player_name`, `discord_id`). The
+  account a person plays under on a platform moved to a new
+  `dim_manager_platform`, keyed by `(manager_id, platform)` and unique on
+  `(platform, platform_user_id)`. `platform_user_id` is the member key the
+  rating frames are indexed by, and `display_name` is the name that account
+  shows under -- previously both roles were overloaded onto
+  `dim_manager.display_name`.
+
+  A member already on file from another league is now matched on
+  `(platform, platform_user_id)` and keeps their existing `manager_id` instead
+  of being minted again. Which leagues a manager belongs to is recorded in
+  `mvw_fact_league_managers`, rewritten one league at a time on every sync.
+
+  `platform` moved from `dim_league` to `dim_online_league`, so a league is a
+  community on a Discord server and each of its seasons carries the platform it
+  was played on. A season may override the league's platform with its own
+  `platform` key, which is what lets a league that moved -- Fantrax one year,
+  Sleeper the next -- keep a single identity across the move. Looking a league
+  up by its platform league id now matches on the `(platform, id)` pair, since
+  that id is only unique within its own platform.
+
+  `fact_seasonal_elos` is now `fact_elos`.
+- `get_members` gains a `display_name` in the member map it returns: what the
+  *account* is called, as against `curr_name`/`curr_short`, which name the team.
+  Sleeper reports the account handle; Fantrax has none beyond the owner name,
+  which is already the member key. It is carried into `league_members` and is
+  the source of `dim_manager_platform.display_name`, which the fact tables'
+  `manager_name` denormalises.
+- `dim_league.discord_server_id` is backfilled on an existing row that has none,
+  not just seeded on a new one, so the column is never left null. A stored id is
+  never replaced: only the Discord side, which owns the column, swaps the
+  generated stand-in for the real one.
+- The anonymizer's default columns follow the same split: `player_name` under
+  `manager`, and `platform_user_id` (category `account`) plus `display_name`
+  (category `manager`) under `manager_platform`. Each dim keeps its own reversal
+  map, so there is now an `anon_manager_platform.json` alongside
+  `anon_manager.json`.
 - **One config per backend, one ratings config per league.** The CSV and SQL
   configs are now shared by every league, and what was `elo_config.yml` is a
   per-league `ratings_<league>.yml`. `sys_config.yml` names them under
@@ -142,6 +200,11 @@ shared by every league, and per-league `elo_config.yml` becomes
 - `EloLeague.add_league` dispatches on the configured platform through
   `LEAGUE_CLASSES` instead of hardcoding `FantraxLeague`, and season
   validation is no longer Fantrax-specific.
+
+### Removed
+- `resources/elos/`, the pre-config ratings kept as history. They were indexed
+  by team name rather than by member id and carried no league id, platform or
+  season year, so nothing in the current system could place them.
 
 ## [1.1.0] - 2026-07-27
 

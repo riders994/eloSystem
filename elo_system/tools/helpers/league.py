@@ -87,6 +87,10 @@ class League(LeagueBase):
                     'curr_name': member_info['curr_name'],
                     'names': [member_info['curr_name']],
                     'short_name': member_info['curr_short'],
+                    # The account's own name, as against the team's. This is the
+                    # member's identity on the platform, so it is what the SQL
+                    # side files them under.
+                    'display_name': member_info.get('display_name'),
                     'team_id': member_info['team_id'],
                     'is_commish': member_info['commish'],
                     'standing': member_info['standing'],
@@ -109,6 +113,7 @@ class League(LeagueBase):
                 old_info['names'].append(member_info['curr_name'])
             old_info.update({
                 'short_name': member_info['curr_short'],
+                    'display_name': member_info.get('display_name'),
                     'team_id': member_info['team_id'],
                     'is_commish': member_info['commish'],
                     'standing': member_info['standing'],
