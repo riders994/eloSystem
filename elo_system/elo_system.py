@@ -6,34 +6,21 @@ from pathlib import Path
 from .tools import EloLeague, EloCSV, EloSQL
 from .tools.basics import load_config_file, write_config_file, str_to_path
 
-# FANTRAX_LC = 'fantrax_lc.yml'
-# SLEEPER_LC = 'sleeper_lc.yml'
-#
-# LOCATION = 'resources'
-#
-# CONFIG_DIR = 'league_configs'
-#
-# ELO_DIR = 'elos'
-#
-# FANTRAX_IDS = {
-#     2024: 'blk3bn3clw9njuhc',
-#     2025: 'wserh14rmbbpqtcg',
-# }
-#
-# SLEEPER_IDS = [
-#     '',
-#     '',
-# ]
-
 CONFIGS = {
-    'sql', 'csv', 'elo', 'league',
+    'sql', 'csv', 'elo', 'league', 'ratings',
 }
+
+# The ratings config names the league, so it has to be read before the CSV
+# backend is built -- that is what settles which directory a league writes to.
+CONFIG_ORDER = ('ratings', 'league', 'elo', 'csv', 'sql')
 
 # Default locations used when EloSystem is constructed without a config path
 # (bootstrap mode): the directory skeleton is created relative to the CWD.
 DEFAULT_RESOURCES_DIR = 'resources'
 DEFAULT_CONFIGS_DIR = 'configs'
 DEFAULT_SYS_CONFIG = 'sys_config.yml'
+# Fallback when no league is configured at all (bootstrap, or a lone league).
+DEFAULT_RATINGS_CONFIG = 'ratings_config.yml'
 
 
 
@@ -41,7 +28,7 @@ DEFAULT_SYS_CONFIG = 'sys_config.yml'
 
 class EloSystem:
 
-    def __init__(self, config_path: str | None = None):
+    def __init__(self, config_path: str | None = None, league: str | None = None):
         if config_path is None:
             # Bootstrap mode: no config supplied. Create the resource/config
             # directory skeleton and start from whatever sys config exists
@@ -65,11 +52,18 @@ class EloSystem:
         self.reader_key = config.get('reader', 'csv')
         self.writer_key = config.get('writer', 'csv')
         self.csv_config_loc = config.get('csv_config_name', 'csv_config.yml')
-        self.elo_league_config_loc = config.get('elo_league_config_name', 'elo_config.yml')
         self.sql_config_loc = config.get('sql_config_name', 'sql_config.yml')
 
+        # The CSV and SQL configs are shared; the ratings config is per league.
+        # One EloSystem drives one league, so which one is settled here, before
+        # any backend exists.
+        self.ratings_configs: dict[str, str] = dict(config.get('ratings_configs', dict()))
+        self.default_league = config.get('default_league')
+        self.league = self._select_league(league)
+        self.ratings_config_loc = self._ratings_config_loc()
+
         self.csv_config = dict()
-        self.elo_league_config = dict()
+        self.ratings_config = dict()
         self.sql_config = dict()
 
         self.reader = None
@@ -78,6 +72,47 @@ class EloSystem:
         self.elo_csv = None
         self.elo_sql = None
 
+
+    def _select_league(self, league: str | None) -> str | None:
+        """Settle which league this instance drives.
+
+        Explicit argument first, then the config's default, then -- only when
+        exactly one league is configured -- that one. An ambiguous choice is
+        an error rather than a guess, because picking wrong would publish one
+        league's ratings under another's name.
+        """
+        if league is not None:
+            if self.ratings_configs and league not in self.ratings_configs:
+                raise KeyError('Unknown league: {}. Configured: {}'.format(
+                    league, ', '.join(sorted(self.ratings_configs)) or 'none'))
+            return league
+        if self.default_league is not None:
+            return self.default_league
+        if len(self.ratings_configs) == 1:
+            return next(iter(self.ratings_configs))
+        if not self.ratings_configs:
+            return None
+        raise KeyError(
+            'Several leagues are configured ({}); pass league= or set '
+            'default_league'.format(', '.join(sorted(self.ratings_configs)))
+        )
+
+    def _ratings_config_loc(self) -> str:
+        """The ratings config filename for the selected league."""
+        if self.league is not None and self.league in self.ratings_configs:
+            return self.ratings_configs[self.league]
+        if self.league is not None:
+            return 'ratings_{}.yml'.format(self.league)
+        return DEFAULT_RATINGS_CONFIG
+
+    @property
+    def league_dir(self) -> str | None:
+        """The ratings subdirectory for this league.
+
+        Defaults to the league key, so one CSV config can serve every league;
+        a league can override it with ratings_dir in its own config.
+        """
+        return self.ratings_config.get('ratings_dir', self.league)
 
     def _backend(self, key: str):
         return {'sql': self.elo_sql, 'csv': self.elo_csv}[key]
@@ -136,7 +171,7 @@ class EloSystem:
             self.sql_config = config
             self.elo_sql = EloSQL(
                 self.sql_config,
-                self.elo_league_config,
+                self.ratings_config,
                 connector,
                 self.resources_dir
             )
@@ -179,7 +214,8 @@ class EloSystem:
             self.csv_config = config
             self.elo_csv = EloCSV(
                 self.csv_config,
-                path
+                path,
+                self.league_dir
             )
 
     def set_elo_csv(
@@ -211,17 +247,23 @@ class EloSystem:
 
     def read_league_config(self, config: dict | None) -> None:
         if config is None:
-            config = load_config_file(Path(self.configs_dir, self.elo_league_config_loc))
+            config = load_config_file(Path(self.configs_dir, self.ratings_config_loc))
         if self._validate_league_config(config):
-            self.elo_league_config = config
-            self.elo_league = EloLeague(self.elo_league_config)
+            self.ratings_config = config
+            self.elo_league = EloLeague(self.ratings_config)
 
 
     def _load_configs(self, configs: dict) -> bool:
-        for k, v in configs.items():
+        for k in configs:
             if k not in CONFIGS:
                 raise KeyError(k)
-            if k in {'elo', 'league'}:
+        # Read in a fixed order rather than the caller's: the CSV backend
+        # needs the league already known.
+        ordered = [k for k in CONFIG_ORDER if k in configs]
+        for k, v in ((k, configs[k]) for k in ordered):
+            if k not in CONFIGS:
+                raise KeyError(k)
+            if k in {'elo', 'league', 'ratings'}:
                 self.read_league_config(v)
             elif k == 'csv':
                 self.read_csv_config(v)
@@ -246,13 +288,19 @@ class EloSystem:
     def _sys_config(self) -> dict[str, Any]:
         # The keys have to be the ones __init__ reads back, and the values the
         # backend *names* -- writing self.reader would serialise the object.
-        return {
+        # The CSV and SQL configs are shared across leagues; ratings_configs
+        # names one per league.
+        sys_config = {
             'reader': self.reader_key,
             'writer': self.writer_key,
             'csv_config_name': self.csv_config_loc,
-            'elo_league_config_name': self.elo_league_config_loc,
             'sql_config_name': self.sql_config_loc,
         }
+        if self.ratings_configs:
+            sys_config['ratings_configs'] = dict(self.ratings_configs)
+        if self.default_league is not None:
+            sys_config['default_league'] = self.default_league
+        return sys_config
 
     def write_configs(self, which: str | list[str]) -> None:
         if isinstance(which, list):
@@ -265,15 +313,15 @@ class EloSystem:
                 write_config_file(Path(self.configs_dir, self.csv_config_loc), self.csv_config)
             elif which == 'sql':
                 write_config_file(Path(self.configs_dir, self.sql_config_loc), self.sql_config)
-            elif which == 'league':
-                write_config_file(Path(self.configs_dir, self.elo_league_config_loc), self.elo_league_config)
+            elif which in {'league', 'ratings'}:
+                write_config_file(Path(self.configs_dir, self.ratings_config_loc), self.ratings_config)
 
 
     def dump(self) -> dict[str, Any]:
         res = {'sys': self._sys_config()}
-        if self.elo_league_config is not None:
-            if len(self.elo_league_config):
-                res.update({'league': self.elo_league_config})
+        if self.ratings_config is not None:
+            if len(self.ratings_config):
+                res.update({'ratings': self.ratings_config})
         if self.csv_config is not None:
             if len(self.csv_config):
                 res.update({'csv': self.csv_config})
@@ -307,9 +355,9 @@ class EloSystem:
             if scrape:
                 for year in years:
                     self.elo_league.add_league(year, overwrite=True)
-            self.elo_league_config = self.elo_league.dump()
+            self.ratings_config = self.elo_league.dump()
 
-        self.elo_sql.set_league_config(self.elo_league_config)
+        self.elo_sql.set_league_config(self.ratings_config)
         self.elo_sql.sync_dims()
 
     def publish(self):

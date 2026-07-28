@@ -1,0 +1,28 @@
+# Per-league ratings config. Copy to ratings_<league>.yml, name it in
+# sys_config's ratings_configs, and edit.
+platform: fantrax          # 'fantrax' or 'sleeper'
+league_type: nba           # 'nba' or 'nfl'
+current_sports_year: 2025
+
+# Optional:
+# is_dynasty: false
+# is_roto: false
+# osa_factor: 0.4          # offseason regression toward 1500
+# k: 60                    # Elo K-factor
+# scoring: median          # nfl: 'median' (vs the league median, the default)
+#                          #      or 'default' (head to head on points share).
+#                          # nba: 'default', 'binary' or 'trinary'.
+# ratings_dir: my_league   # CSV subdirectory; defaults to the league key
+# seasons: {}              # populated by add_season / scraping
+
+# A Sleeper NFL league instead. league_id is Sleeper's own (a numeric string),
+# and it changes every season, so a dynasty lists one per year -- get_league's
+# 'previous_league_id' chains them backwards.
+#
+# platform: sleeper
+# league_type: nfl
+# current_sports_year: 2024
+# scoring: median
+# seasons:
+#   2023: {league_id: '920833359809437696'}
+#   2024: {league_id: '1063131085976006656'}

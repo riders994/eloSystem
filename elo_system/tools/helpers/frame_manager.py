@@ -41,13 +41,25 @@ class FrameManager(LeagueBase):
                 return False
         return True
 
+    def _frames(self) -> dict[Any, pd.DataFrame]:
+        return self.roto_history if self.is_roto else self.seasonal_elo
+
     def validate_season(self, season: int) -> bool:
+        """True when this season is rated through to its final week.
+
+        A season with no frame at all is simply unrated, which is a normal
+        state to ask about -- callers use this to decide whether a season
+        still needs running -- so it answers False rather than raising.
+        """
         w = self.config[season]['current_season_length']
-        if self.is_roto:
-            frame = self.roto_history[season]
-        else:
-            frame = self.seasonal_elo[season]
+        frame = self._frames().get(season)
+        if frame is None:
+            return False
         return frame.get(WEEK_STR.format(w)) is not None
+
+    def has_data(self) -> bool:
+        """True once any ratings have been built or loaded."""
+        return any(frame is not None for frame in self._frames().values())
 
     def _check_full_seasons(self) -> bool:
         if self.is_dynasty:
@@ -122,11 +134,18 @@ class FrameManager(LeagueBase):
 
             df = self.dynasty_elo.reindex(self.dynasty_elo.index.union(new_ids, sort=False))
 
-            ratings = df.loc[next_ids, latest_col].fillna(1500.0)
-            updated = offseason_adjustment(ratings, self.osa_factor)
-
-            df[new_col] = df[latest_col]
-            df.loc[next_ids, new_col] = updated
+            # Regress everyone on file, not just the coming season's members.
+            # Skipping the ones who had left froze their rating for good: they
+            # never decayed toward the mean while every active manager did, so
+            # a manager years gone could outrank the live league on a result
+            # nobody can still be beaten by. It also broke the league mean --
+            # a frozen row sitting off 1500 pulls the average off 1500 for
+            # good, where regressing the whole frame keeps it there.
+            #
+            # A member who has never appeared has no rating to regress, so
+            # they enter at the 1500 the adjustment leaves untouched anyway.
+            ratings = df[latest_col].fillna(1500.0)
+            df[new_col] = offseason_adjustment(ratings, self.osa_factor)
             self.dynasty_elo = df
         return None
 

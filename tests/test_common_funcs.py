@@ -1,12 +1,14 @@
 """Tests for elo_system.tools.basics.common_funcs."""
 import math
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from elo_system.tools.basics.common_funcs import (
     elo_share,
     elo_expected,
+    balance_deltas,
     score_elo_calc,
     bin_elo_calc,
     trin_elo_calc,
@@ -295,3 +297,79 @@ def test_week_formatter_single_week():
 
 def test_week_formatter_range_is_inclusive():
     assert week_formatter("2:5") == range(2, 6)
+
+
+# ---------------------------------------------------------------------------
+# balance_deltas / median_elo_calc conservation
+# ---------------------------------------------------------------------------
+
+def test_balance_deltas_makes_the_week_sum_to_zero():
+    d = np.array([12.0, 5.0, -3.0, -6.0])      # gains 17, losses 9
+    out = balance_deltas(d)
+    assert out.sum() == pytest.approx(0.0, abs=1e-12)
+    # each side scaled to their common average of 13
+    assert out[out > 0].sum() == pytest.approx(13.0)
+    assert -out[out < 0].sum() == pytest.approx(13.0)
+
+
+def test_balance_deltas_keeps_every_sign():
+    d = np.array([0.2, 40.0, -0.1, -35.0])
+    out = balance_deltas(d)
+    assert np.all(np.sign(out) == np.sign(d))
+
+
+def test_balance_deltas_preserves_relative_size_within_a_side():
+    d = np.array([10.0, 5.0, -2.0, -6.0])
+    out = balance_deltas(d)
+    assert out[0] / out[1] == pytest.approx(d[0] / d[1])
+    assert out[2] / out[3] == pytest.approx(d[2] / d[3])
+
+
+@pytest.mark.parametrize('d', [
+    np.zeros(4),                    # nobody moved
+    np.array([3.0, 2.0, 1.0]),      # nobody lost
+    np.array([-3.0, -2.0]),         # nobody won
+])
+def test_balance_deltas_passes_through_one_sided_weeks(d):
+    assert np.array_equal(balance_deltas(d), d)
+
+
+def test_median_elo_calc_conserves_total_rating_on_skewed_scores():
+    # One blowout drags the mean above the median. Before balancing, this is
+    # exactly the shape of week that inflated the league.
+    scores = np.array([300.0, 110.0, 105.0, 100.0, 95.0, 90.0])
+    elos = pd.Series([1500.0] * 6, index=list('abcdef'))
+    out = median_elo_calc(scores, elos)
+    assert out.sum() == pytest.approx(elos.sum(), abs=1e-9)
+
+
+def test_median_elo_calc_conserves_with_unequal_ratings():
+    scores = np.array([180.0, 130.0, 128.0, 90.0, 70.0, 65.0])
+    elos = pd.Series([1720.0, 1610.0, 1500.0, 1440.0, 1390.0, 1340.0],
+                     index=list('abcdef'))
+    out = median_elo_calc(scores, elos)
+    assert out.sum() == pytest.approx(elos.sum(), abs=1e-9)
+
+
+def test_median_elo_calc_above_median_always_gains():
+    scores = np.array([400.0, 120.0, 118.0, 80.0, 70.0, 60.0])
+    elos = pd.Series([1500.0] * 6, index=list('abcdef'))
+    out = median_elo_calc(scores, elos)
+    med = np.median((scores - scores.min()) / (scores.max() - scores.min()))
+    normed = (scores - scores.min()) / (scores.max() - scores.min())
+    for i, member in enumerate(elos.index):
+        if normed[i] > med:
+            assert out[member] > 1500.0, f'{member} beat the median but lost rating'
+        elif normed[i] < med:
+            assert out[member] < 1500.0
+
+
+def test_median_elo_calc_unchanged_for_a_symmetric_week():
+    # Balancing is a no-op when gains already equal losses, so the original
+    # hand-computed values still stand.
+    scores = np.array([100.0, 90.0, 80.0, 70.0, 60.0])
+    elos = pd.Series([1500.0] * 5, index=list('abcde'))
+    out = median_elo_calc(scores, elos)
+    assert out['a'] == pytest.approx(1512.163953243245)
+    assert out['c'] == pytest.approx(1500.0)
+    assert out['e'] == pytest.approx(1487.836046756755)

@@ -27,6 +27,7 @@ def fields(template):
 
 def test_load_elo_formats_with_expected_kwargs():
     sql = LOAD_ELO.format(
+        member_col='team_id',
         schema='fantasy_sports',
         table='fact_seasonal_elos',
         scope_col='online_league_id',
@@ -43,16 +44,21 @@ def test_load_elo_formats_with_expected_kwargs():
 
 def test_load_elo_serves_the_dynasty_table_too():
     flat = norm(LOAD_ELO.format(
-        schema='s', table='fact_dynasty_elos', scope_col='league_id', scope_id=7))
+        member_col='manager_id', schema='s', table='fact_dynasty_elos',
+        scope_col='league_id', scope_id=7))
     assert 'FROM s.fact_dynasty_elos' in flat
     assert flat.endswith('WHERE league_id = 7')
+    # Dynasty rows are identified by manager, not by a season's team: a
+    # departed manager keeps a rating but owns no team in later seasons.
+    assert 'manager_id' in flat
+    assert 'team_id' not in flat
 
 
 def test_load_elo_requires_all_placeholders():
     # Missing any of the four named fields must raise (guards renames).
-    for missing in ('schema', 'table', 'scope_col', 'scope_id'):
+    for missing in ('member_col', 'schema', 'table', 'scope_col', 'scope_id'):
         kwargs = {
-            'schema': 's', 'table': 'fact_seasonal_elos',
+            'member_col': 'team_id', 'schema': 's', 'table': 'fact_seasonal_elos',
             'scope_col': 'online_league_id', 'scope_id': 1,
         }
         del kwargs[missing]
@@ -61,7 +67,7 @@ def test_load_elo_requires_all_placeholders():
 
 
 def test_load_elo_has_exactly_expected_fields():
-    assert fields(LOAD_ELO) == {'schema', 'table', 'scope_col', 'scope_id'}
+    assert fields(LOAD_ELO) == {'member_col', 'schema', 'table', 'scope_col', 'scope_id'}
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +76,7 @@ def test_load_elo_has_exactly_expected_fields():
 
 def test_load_roto_formats_with_expected_kwargs():
     sql = LOAD_ROTO.format(
+        member_col='team_id',
         schema='fantasy_sports',
         table='fact_rotos',
         scope_col='online_league_id',
@@ -84,9 +91,9 @@ def test_load_roto_formats_with_expected_kwargs():
 
 
 def test_load_roto_requires_all_placeholders():
-    for missing in ('schema', 'table', 'scope_col', 'scope_id'):
+    for missing in ('member_col', 'schema', 'table', 'scope_col', 'scope_id'):
         kwargs = {
-            'schema': 's', 'table': 'fact_rotos',
+            'member_col': 'team_id', 'schema': 's', 'table': 'fact_rotos',
             'scope_col': 'online_league_id', 'scope_id': 1,
         }
         del kwargs[missing]
@@ -95,7 +102,7 @@ def test_load_roto_requires_all_placeholders():
 
 
 def test_load_roto_has_exactly_expected_fields():
-    assert fields(LOAD_ROTO) == {'schema', 'table', 'scope_col', 'scope_id'}
+    assert fields(LOAD_ROTO) == {'member_col', 'schema', 'table', 'scope_col', 'scope_id'}
 
 
 def test_load_roto_does_not_filter_on_is_dynasty():
@@ -118,3 +125,11 @@ def test_load_queries_are_keyed_by_the_value_column():
 def test_load_queries_alias_their_value_column_to_rating():
     for value, template in LOAD_QUERIES.items():
         assert '{} AS rating'.format(value) in norm(template)
+
+
+def test_fact_specs_declare_how_a_row_is_identified():
+    # Seasonal facts and rotos sit inside one season, so a team identifies
+    # them. Dynasty facts span seasons and are identified by the manager.
+    assert FACT_SPECS['dynasty_elo']['member_key'] == 'manager_id'
+    for name in ('seasonal_elo', 'roto_history'):
+        assert FACT_SPECS[name].get('member_key', 'team_id') == 'team_id'

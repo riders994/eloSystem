@@ -3,7 +3,21 @@
 reader: csv
 writer: csv
 
-# Optional overrides for the sibling config filenames (defaults shown):
+# The CSV and SQL configs are shared by every league.
+# Optional overrides for their filenames (defaults shown):
 # csv_config_name: csv_config.yml
-# elo_league_config_name: elo_config.yml
 # sql_config_name: sql_config.yml
+
+# One ratings config per league, keyed by a short name of your choosing. The
+# key is also the directory each league's CSVs are written to, under the CSV
+# config's write_loc -- so the frames of two leagues never collide.
+ratings_configs:
+  macho_mandarins: ratings_macho_mandarins.yml
+  die_nasty: ratings_die_nasty.yml
+
+# Which league an EloSystem drives when none is named:
+#   EloSystem('resources/configs/sys_config.yml')                 -> this one
+#   EloSystem('resources/configs/sys_config.yml', 'die_nasty')    -> that one
+# Required once more than one league is configured; with exactly one, that
+# one is used.
+default_league: macho_mandarins

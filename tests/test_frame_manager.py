@@ -235,8 +235,10 @@ def test_gen_dynasty_second_season_offseason_adjustment():
     # New member joins at 1500 (NaN -> fillna(1500) -> adjustment is a no-op).
     assert 'erin' in d.index
     assert d.loc['erin', 'week_4'] == pytest.approx(1500.0)
-    # Departed member keeps the carried-over value, no adjustment applied.
-    assert d.loc['dan', 'week_4'] == pytest.approx(1550.0)
+    # A departed member is regressed like everyone else: 1550 -> 1530. Left
+    # frozen, they would never decay toward the mean while the active league
+    # did, and the league average could never hold at 1500.
+    assert d.loc['dan', 'week_4'] == pytest.approx(1530.0)
     # Everyone (old and new) is present.
     assert set(d.index) == {'alice', 'bob', 'cara', 'dan', 'erin'}
 
@@ -389,3 +391,69 @@ def test_generated_week_zero_is_float():
     fm = FrameManager(make_config())
     fm.generate(2024)
     assert fm.seasonal_elo[2024]['week_0'].dtype == 'float64'
+
+
+# ---------------------------------------------------------------------------
+# departed managers and the league average
+# ---------------------------------------------------------------------------
+
+def test_gen_dynasty_regresses_departed_members_repeatedly():
+    # A manager who leaves keeps decaying every offseason, rather than being
+    # pinned to whatever they last scored.
+    fm = _played_2024_frame_manager()
+    fm._gen_dynasty_elo(2024)
+    fm._gen_dynasty_elo(2025)
+    assert fm.dynasty_elo.loc['dan', 'week_4'] == pytest.approx(1530.0)
+
+    # A third season with the same roster regresses dan again: 1530 -> 1518.
+    fm.config[2026] = {
+        'current_season_length': 3,
+        'dynasty_start_week': 5,
+        'league_members': {'alice': {}, 'bob': {}, 'cara': {}, 'erin': {}},
+    }
+    fm._gen_dynasty_elo(2026)
+    assert fm.dynasty_elo.loc['dan', 'week_5'] == pytest.approx(1518.0)
+
+
+def test_offseason_adjustment_holds_the_league_average_at_1500():
+    # The whole point: if the frame averages 1500 going into an offseason it
+    # still averages 1500 coming out, whoever left and whoever joined.
+    fm = _played_2024_frame_manager()
+    # dan (who departs) and the rest, balanced about 1500.
+    fm.seasonal_elo[2024]['week_3'] = [1600.0, 1400.0, 1450.0, 1550.0]
+    fm._gen_dynasty_elo(2024)
+    assert fm.dynasty_elo['week_3'].mean() == pytest.approx(1500.0)
+
+    fm._gen_dynasty_elo(2025)   # dan leaves, erin joins
+    assert fm.dynasty_elo['week_4'].mean() == pytest.approx(1500.0), (
+        'a departed or joining member must not shift the league average'
+    )
+
+
+def test_offseason_adjustment_moves_the_average_by_the_regression_law():
+    # More generally, the frame mean regresses exactly as an individual does:
+    # (mean - 1500) * (1 - factor) + 1500. It is only fixed at 1500.
+    fm = _played_2024_frame_manager()
+    fm._gen_dynasty_elo(2024)
+    before = fm.dynasty_elo['week_3'].mean()          # 1512.5 on this fixture
+    fm._gen_dynasty_elo(2025)
+    after = fm.dynasty_elo['week_4'].mean()
+    # erin joins at 1500, so the pre-adjustment population is the 4 old rows
+    # plus one at 1500.
+    expected_pre = (before * 4 + 1500.0) / 5
+    assert after == pytest.approx((expected_pre - 1500) * 0.6 + 1500)
+
+
+def test_departed_member_cannot_outrank_the_live_league_forever():
+    # dan leaves on 1550, the best rating on the board. After enough
+    # offseasons he is back in the pack rather than still top.
+    fm = _played_2024_frame_manager()
+    fm._gen_dynasty_elo(2024)
+    assert fm.dynasty_elo['week_3'].idxmax() == 'alice'
+
+    fm._gen_dynasty_elo(2025)
+    d = fm.dynasty_elo
+    # alice regressed 1600 -> 1560, dan 1550 -> 1530: alice still leads, and
+    # dan's lead over the field shrinks instead of being frozen in.
+    assert d.loc['alice', 'week_4'] > d.loc['dan', 'week_4']
+    assert abs(d.loc['dan', 'week_4'] - 1500) < abs(1550 - 1500)

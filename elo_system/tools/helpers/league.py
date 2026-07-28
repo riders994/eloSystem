@@ -1,6 +1,6 @@
 from typing import Any
 
-from .scraper import FantraxScraper
+from .scraper import FantraxScraper, SleeperScraper
 from elo_system._vendor.fantraxapi.objs import ScoringPeriodResult
 from ..basics import (
     LeagueBase,
@@ -36,6 +36,22 @@ class League(LeagueBase):
 
     def _generate_scraper(self) -> None:
         self.scraper.login()
+
+    def _scraper_config(self) -> dict[str, Any]:
+        """The slice of this season's config a platform scraper needs."""
+        return {
+            'league_id': self.league_id,
+            'playoff_start': self.playoff_start,
+            'members': self.config.get('members', dict()),
+        }
+
+    def _week_or_default(self, week: int | None) -> int:
+        """Fall back to the last scored week, then to the season length."""
+        if week is None:
+            week = self.last_scored_week
+            if week is None:
+                week = self.current_season_length
+        return week
 
     def _load(self) -> None:
         self.league_id = self.config['league_id']
@@ -150,17 +166,18 @@ class League(LeagueBase):
 class FantraxLeague(League):
 
     def _generate_scraper(self):
-        scraper_config = {
-            'league_id': self.league_id,
-            'playoff_start': self.playoff_start,
-            'members': self.config.get('members', dict()),
-        }
-        self.scraper = FantraxScraper(scraper_config)
+        self.scraper = FantraxScraper(self._scraper_config())
         super()._generate_scraper()
 
     def get_week(self, week: int | None = None) -> ScoringPeriodResult:
-        if week is None:
-            week = self.last_scored_week
-            if week is None:
-                week = self.current_season_length
-        return self.scraper.get_scoreboard(week)
+        return self.scraper.get_scoreboard(self._week_or_default(week))
+
+
+class SleeperLeague(League):
+
+    def _generate_scraper(self):
+        self.scraper = SleeperScraper(self._scraper_config())
+        super()._generate_scraper()
+
+    def get_week(self, week: int | None = None) -> list[dict]:
+        return self.scraper.get_scoreboard(self._week_or_default(week))

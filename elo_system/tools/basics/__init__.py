@@ -8,6 +8,7 @@ from .common_funcs import (
     bin_elo_calc,
     score_elo_calc,
     trin_elo_calc,
+    balance_deltas,
     median_elo_calc,
     str_to_path,
     load_config_file,

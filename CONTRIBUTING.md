@@ -38,16 +38,28 @@ easy to cover with hand-computed expectations.
   a "sources root", it may rewrite these on save — turn that off.
 - **No network in tests.** Patch the scraper/league layer (see
   `tests/mocks/fantrax.py` and the monkeypatched `ft.League` in the scraper
-  tests) rather than hitting a live API.
+  tests, or `tests/mocks/sleeper.py` and its `patch_sleeper_api` helper)
+  rather than hitting a live API.
 - Update `CHANGELOG.md` (the `Unreleased` section) for any user-facing change.
 
 ## Architecture pointers
 
-- **Adding a platform** (e.g. Sleeper): subclass `LeagueScraper` and implement
-  its five abstract methods (`login`, `get_members`, `get_scoreboard`,
-  `get_playoff_start`, `get_current_season_length`), and add a corresponding
-  `League` subclass that wires it up via `_generate_scraper`. `get_members`
-  must return the canonical member map keyed by stable owner id.
+- **Adding a platform**: subclass `LeagueScraper` and implement its six
+  abstract methods (`login`, `get_members`, `get_league_name`,
+  `get_scoreboard`, `get_playoff_start`, `get_current_season_length`), add a
+  corresponding `League` subclass that wires it up via `_generate_scraper`, a
+  formatter reachable from `set_formatter`, and an entry in
+  `elo_league.LEAGUE_CLASSES`. `get_members` must return the canonical member
+  map keyed by a *stable* owner id -- one that survives from season to season,
+  since that key is what lets a dynasty span league ids.
+  `FantraxScraper`/`FantraxLeague`/`fantrax_formatter` and their Sleeper
+  counterparts are the two worked examples. A formatter's job is to emit a
+  frame indexed by member id carrying whatever the league type's calculator
+  reads: `true_score` + `opponent` for the head-to-head calculations,
+  `scores` for the median one.
+- **Optional platform dependencies** should be imported lazily inside the
+  scraper, not at module scope, so the extra stays optional -- see
+  `SleeperScraper._api`.
 - **Adding a persistence backend** (e.g. SQL): subclass `DataBase` and
   implement the `_publish_*` hooks plus `load_frames`, mirroring `EloCSV`.
 

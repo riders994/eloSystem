@@ -7,10 +7,25 @@ from .basics.common_funcs import week_formatter
 from .helpers import (
     League,
     FantraxLeague,
+    SleeperLeague,
     FrameManager,
     set_formatter,
     set_calculator
 )
+
+# The League subclass that knows how to talk to each platform. Adding a
+# platform means adding its scraper, its formatter and an entry here.
+LEAGUE_CLASSES = {
+    'fantrax': FantraxLeague,
+    'sleeper': SleeperLeague,
+}
+
+# Head-to-head categories are the natural read of a Fantrax NBA week, whereas
+# football is conventionally rated against the league median.
+DEFAULT_SCORING = {
+    'nba': 'default',
+    'nfl': 'median',
+}
 
 
 class EloLeague(LeagueBase):
@@ -29,6 +44,7 @@ class EloLeague(LeagueBase):
         self.k = 60
         self.league_type = None
         self.platform = None
+        self.scoring = None
 
         self.season_stats = {
             'playoff_start': dict(),
@@ -52,6 +68,7 @@ class EloLeague(LeagueBase):
         self.is_roto: bool = self.config.get('is_roto', False)
         self.k: int = self.config.get('k', self.k)
         self.league_id: int = self.config.get('league_id', self.league_id)
+        self.scoring: str = self.config.get('scoring', DEFAULT_SCORING.get(self.league_type, 'default'))
         self.seasons.update(self.config.get('seasons', dict()))
 
     def _dump(self) -> None:
@@ -62,25 +79,36 @@ class EloLeague(LeagueBase):
             'seasons': self.seasons,
             'is_roto': self.is_roto,
             'k': self.k,
-            'league_id': self.league_id
+            'league_id': self.league_id,
+            'scoring': self.scoring
         })
 
     def set_lid(self, new: int) -> None:
         self.league_id = new
 
+    def _league_class(self):
+        """The League subclass for the configured platform."""
+        cls = LEAGUE_CLASSES.get(self.platform)
+        if cls is None:
+            raise ValueError('Unknown platform: {}'.format(self.platform))
+        # Resolve through this module's namespace rather than returning the
+        # registered object, so the bound name stays the single source of
+        # truth for which class gets built.
+        return globals().get(cls.__name__, cls)
+
     @staticmethod
-    def _validate_fantrax(seas_dict: dict[str, Any]) -> bool:
+    def _validate_league_id(seas_dict: dict[str, Any]) -> bool:
         return seas_dict.get('league_id') is not None
 
     def _validate_season(self, seas_dict: dict[str, Any]) -> bool:
-        if self.platform == 'fantrax':
-            return self._validate_fantrax(seas_dict)
-        return False
+        # Every supported platform identifies a season by its own league id.
+        if self.platform not in LEAGUE_CLASSES:
+            return False
+        return self._validate_league_id(seas_dict)
 
     def add_season(self, seas_dict: dict[str, Any], year: int, league: bool = False) -> bool:
         if self._validate_season(seas_dict):
-            if self.platform == 'fantrax':
-                self.seasons.update({year: seas_dict})
+            self.seasons.update({year: seas_dict})
 
             if league:
                 self.add_league(year)
@@ -146,7 +174,7 @@ class EloLeague(LeagueBase):
     def add_league(self, league_year: int, overwrite: bool = False) -> None:
         if overwrite or self.leagues.get(league_year) is None:
             if self.seasons.get(league_year) is not None:
-                l = FantraxLeague(league_year, self.seasons)
+                l = self._league_class()(league_year, self.seasons)
                 l.scrape()
                 self.leagues.update({league_year: l})
             else:
@@ -175,7 +203,16 @@ class EloLeague(LeagueBase):
             w = 0
             if year != start_season:
                 for y in range(start_season, year):
-                    w += self.seasons[y]['current_season_length']
+                    length = self.seasons[y].get('current_season_length')
+                    if length is None:
+                        # Where a season starts on the dynasty timeline is the
+                        # sum of everything before it, so an unscraped earlier
+                        # season leaves the offset unknowable.
+                        raise KeyError(
+                            'Season {} has no length on file, so the dynasty '
+                            'start week for {} cannot be derived'.format(y, year)
+                        )
+                    w += length
                     w += 1
             s.update({'dynasty_start_week': w})
         else:
@@ -183,8 +220,23 @@ class EloLeague(LeagueBase):
                 self._set_dynasty_start_week(y)
 
 
+    def _can_convert_to_dynasty(self) -> bool:
+        """Whether this league is in a state that can be converted.
+
+        Converting is a migration of ratings that already exist: it replays
+        the seasons on file onto one continuous timeline. A league with no
+        ratings yet has nothing to migrate and should be built as a dynasty
+        from the start instead -- set is_dynasty in its config, and the run
+        pipeline lays the dynasty frame down as it goes.
+        """
+        if self.frame_manager is None:
+            return False
+        if not self.frame_manager.has_data():
+            return False
+        return self.frame_manager.can_dynasty()
+
     def _change_to_dynasty(self):
-        if self.frame_manager.can_dynasty():
+        if self._can_convert_to_dynasty():
             self.frame_manager.set_is_dynasty(True)
             for s in self.seasons.keys():
                 self.add_league(s)
@@ -217,6 +269,13 @@ class EloLeague(LeagueBase):
         self.formatter = set_formatter(self.platform)
         self._set_frame_manager()
         self.calculator = set_calculator(self.league_type)
+        if self.is_dynasty:
+            # Dynasty weeks are offsets into one continuous timeline across
+            # seasons, so this season's offset has to be on file before any
+            # of its weeks are rated. Converting an existing league sets
+            # these for every season up front; a league initialised as a
+            # dynasty reaches them here, one season at a time.
+            self._set_dynasty_start_week(year)
 
     def _return_frames(self, year: int) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
         if self.extras == 2:
@@ -248,7 +307,8 @@ class EloLeague(LeagueBase):
                         formatted_scores,
                         dynasty_week,
                         overwrite,
-                        self.k
+                        self.k,
+                        scoring=self.scoring
                     )
                 except AttributeError:
                     raise KeyError('No Dynasty frame initialized')
@@ -259,7 +319,8 @@ class EloLeague(LeagueBase):
                         formatted_scores,
                         week,
                         overwrite,
-                        self.k
+                        self.k,
+                        scoring=self.scoring
                     )
                 except KeyError as e:
                     if e.args[0] == self.current_sports_year:
@@ -289,8 +350,11 @@ class EloLeague(LeagueBase):
         self._run_multiple(weeks, year, overwrite)
 
     def publish(self) -> dict[str, Any]:
+        # Dump first: state set since the last load -- is_dynasty above all --
+        # lives on the instance until _dump writes it back, so shipping
+        # self.config raw would publish, and persist, a stale league.
         payload = self.frame_manager.publish()
-        payload.update({'config': self.config})
+        payload.update({'config': self.dump()})
 
         return payload
 

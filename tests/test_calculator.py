@@ -267,13 +267,18 @@ def test_nfl_overwrite_recomputes_existing_week(nfl_elo_frame,
     assert out.loc["a", "week_1"] == pytest.approx(1512.163953243245)
 
 
-def test_nfl_default_week_from_score_frame_width(nfl_elo_frame,
-                                                 nfl_score_frame):
-    # week=None resolves to score_frame.shape[1] - 1. With a single 'scores'
-    # column that is week 0, which already exists, so the frame is returned
-    # untouched. Actual behavior, documented here.
+def test_nfl_default_week_from_elo_frame_width(nfl_elo_frame,
+                                               nfl_score_frame):
+    # week=None resolves to elo_frame.shape[1] - 1, as it does for the NBA
+    # calculator. With only 'week_0' present that is week 0, which already
+    # exists, so the frame comes back untouched.
     out = nfl_calculator(nfl_elo_frame, nfl_score_frame)
     assert list(out.columns) == ["week_0"]
+
+    # With two weeks on file it resolves to week 1 and computes it.
+    nfl_elo_frame["week_1"] = [1500.0] * 5
+    out = nfl_calculator(nfl_elo_frame, nfl_score_frame, overwrite=True)
+    assert out.loc["a", "week_1"] == pytest.approx(1512.163953243245)
 
 
 def test_nfl_k_passthrough(nfl_elo_frame, nfl_score_frame):
@@ -290,3 +295,150 @@ def test_nfl_result_indexed_by_members(nfl_elo_frame, nfl_score_frame):
     out = nfl_calculator(nfl_elo_frame, nfl_score_frame, week=1)
     assert list(out.index) == MEMBERS
     assert out["week_1"].notna().all()
+
+
+# ---------------------------------------------------------------------------
+# nfl_calculator: head-to-head mode, alignment and carry-forward
+# ---------------------------------------------------------------------------
+
+def test_nfl_h2h_mode_rates_each_matchup_on_its_points_share():
+    elo_frame = pd.DataFrame({"week_0": [1500.0] * 4},
+                             index=["a", "b", "c", "d"])
+    # a beats b 60/40 on points share; c and d draw.
+    score_frame = pd.DataFrame(
+        {
+            "scores": [120.0, 80.0, 100.0, 100.0],
+            "true_score": [0.6, 0.4, 0.5, 0.5],
+            "opponent": ["b", "a", "d", "c"],
+        },
+        index=["a", "b", "c", "d"],
+    )
+    out = nfl_calculator(elo_frame, score_frame, week=1, scoring="default")
+
+    # At equal ratings the expectation is 0.5, so a gains 60 * 0.1.
+    assert out.loc["a", "week_1"] == pytest.approx(1506.0)
+    assert out.loc["b", "week_1"] == pytest.approx(1494.0)
+    # A draw between equals moves nobody.
+    assert out.loc["c", "week_1"] == pytest.approx(1500.0)
+    assert out.loc["d", "week_1"] == pytest.approx(1500.0)
+    # Head-to-head is zero-sum within each matchup.
+    assert out["week_1"].sum() == pytest.approx(6000.0)
+
+
+def test_nfl_h2h_and_median_modes_disagree():
+    elo_frame = pd.DataFrame({"week_0": [1500.0] * 4},
+                             index=["a", "b", "c", "d"])
+    # a and b post the two best scores but are scheduled against each other,
+    # which is exactly the case the two modes read differently.
+    score_frame = pd.DataFrame(
+        {
+            "scores": [150.0, 140.0, 90.0, 80.0],
+            "true_score": [150 / 290, 140 / 290, 90 / 170, 80 / 170],
+            "opponent": ["b", "a", "d", "c"],
+        },
+        index=["a", "b", "c", "d"],
+    )
+    h2h = nfl_calculator(elo_frame.copy(), score_frame, week=1,
+                         scoring="default")
+    median = nfl_calculator(elo_frame.copy(), score_frame, week=1,
+                            scoring="median")
+
+    # Head to head, b loses to a; against the field, b is well above median.
+    assert h2h.loc["b", "week_1"] < 1500.0
+    assert median.loc["b", "week_1"] > 1500.0
+
+
+def test_nfl_median_aligns_by_member_not_by_row_order():
+    elo_frame = pd.DataFrame({"week_0": [1500.0, 1600.0, 1400.0]},
+                             index=["a", "b", "c"])
+    ordered = pd.DataFrame({"scores": [100.0, 90.0, 80.0]},
+                           index=["a", "b", "c"])
+    # The same week, delivered in a different row order.
+    shuffled = ordered.loc[["c", "a", "b"]]
+
+    from_ordered = nfl_calculator(elo_frame.copy(), ordered, week=1)
+    from_shuffled = nfl_calculator(elo_frame.copy(), shuffled, week=1)
+
+    for member in ("a", "b", "c"):
+        assert from_ordered.loc[member, "week_1"] == pytest.approx(
+            from_shuffled.loc[member, "week_1"]
+        )
+
+
+def test_nfl_median_carries_forward_members_absent_from_the_scoreboard():
+    elo_frame = pd.DataFrame({"week_0": [1500.0, 1600.0, 1400.0]},
+                             index=["a", "b", "c"])
+    # c is missing from this week's scoreboard entirely.
+    score_frame = pd.DataFrame({"scores": [100.0, 80.0]}, index=["a", "b"])
+
+    out = nfl_calculator(elo_frame, score_frame, week=1)
+
+    assert out.loc["c", "week_1"] == pytest.approx(1400.0)
+    assert out["week_1"].notna().all()
+
+
+def test_nfl_median_ignores_scoreboard_entries_with_no_rating():
+    elo_frame = pd.DataFrame({"week_0": [1500.0, 1600.0]}, index=["a", "b"])
+    # 'ghost' is on the scoreboard but has never been seeded a rating.
+    score_frame = pd.DataFrame({"scores": [100.0, 80.0, 500.0]},
+                               index=["a", "b", "ghost"])
+
+    out = nfl_calculator(elo_frame, score_frame, week=1)
+
+    assert list(out.index) == ["a", "b"]
+    assert out["week_1"].notna().all()
+
+
+def test_nfl_median_equal_scores_move_nobody():
+    # Every team posting the same score used to divide by zero when
+    # normalising, yielding NaN ratings for the whole league.
+    elo_frame = pd.DataFrame({"week_0": [1500.0, 1600.0, 1400.0]},
+                             index=["a", "b", "c"])
+    score_frame = pd.DataFrame({"scores": [100.0, 100.0, 100.0]},
+                               index=["a", "b", "c"])
+
+    out = nfl_calculator(elo_frame, score_frame, week=1)
+
+    assert out["week_1"].tolist() == pytest.approx([1500.0, 1600.0, 1400.0])
+
+
+def test_nfl_median_single_team_week():
+    elo_frame = pd.DataFrame({"week_0": [1500.0]}, index=["a"])
+    score_frame = pd.DataFrame({"scores": [100.0]}, index=["a"])
+    out = nfl_calculator(elo_frame, score_frame, week=1)
+    assert out.loc["a", "week_1"] == pytest.approx(1500.0)
+
+
+def test_nfl_h2h_skips_members_without_an_opponent():
+    elo_frame = pd.DataFrame({"week_0": [1500.0, 1500.0, 1700.0]},
+                             index=["a", "b", "c"])
+    # c sat the week out, as Sleeper reports for a playoff bye.
+    score_frame = pd.DataFrame(
+        {
+            "scores": [120.0, 80.0, 95.0],
+            "true_score": [0.6, 0.4, np.nan],
+            "opponent": ["b", "a", None],
+        },
+        index=["a", "b", "c"],
+    )
+    out = nfl_calculator(elo_frame, score_frame, week=1, scoring="default")
+
+    assert out.loc["c", "week_1"] == pytest.approx(1700.0)
+    assert out.loc["a", "week_1"] == pytest.approx(1506.0)
+
+
+def test_nfl_signature_matches_the_positional_call_from_run_one():
+    # EloLeague._run_one calls the calculator it holds positionally as
+    # (elo_frame, score_frame, week, overwrite, k), so both calculators have
+    # to read those positions the same way.
+    elo_frame = pd.DataFrame({"week_0": [1500.0] * 5}, index=MEMBERS)
+    score_frame = pd.DataFrame({"scores": [100.0, 90.0, 80.0, 70.0, 60.0]},
+                               index=MEMBERS)
+
+    out = nfl_calculator(elo_frame, score_frame, 1, False, 120)
+
+    assert "week_1" in out.columns
+    # k landed in k: double the default k, double the movement.
+    assert out.loc["a", "week_1"] - 1500.0 == pytest.approx(
+        2 * 12.163953243245, rel=1e-6
+    )

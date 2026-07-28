@@ -1,12 +1,18 @@
-"""Tests for elo_system.tools.scraper (LeagueScraper and FantraxScraper).
+"""Tests for elo_system.tools.scraper (LeagueScraper, FantraxScraper,
+SleeperScraper).
 
-FantraxScraper.login() is wired to ft.League, which we monkeypatch on the
-module's imported name so no test ever touches the network.
+FantraxScraper.login() is wired to ft.League and SleeperScraper's to the
+sleeper.api functions; both are monkeypatched so no test touches the network.
 """
 import pytest
 
 from elo_system.tools.helpers import scraper as scraper_mod
-from elo_system.tools.helpers.scraper import PLAYOFF_START, FantraxScraper, LeagueScraper
+from elo_system.tools.helpers.scraper import (
+    PLAYOFF_START,
+    FantraxScraper,
+    LeagueScraper,
+    SleeperScraper,
+)
 
 from tests.mocks.fantrax import (
     make_default_teams,
@@ -14,6 +20,14 @@ from tests.mocks.fantrax import (
     make_season,
     make_standings,
 )
+from tests.mocks.sleeper import (
+    LEAGUE_ID as SLEEPER_LEAGUE_ID,
+    make_league,
+    make_matchups,
+    make_user,
+    patch_sleeper_api,
+)
+from tests.mocks.sleeper import make_season as make_sleeper_season
 
 LEAGUE_ID = 'lg123abc'
 
@@ -258,3 +272,204 @@ def test_get_league_name_reads_the_wrapper(monkeypatch):
 
 def test_get_league_name_before_login_is_none():
     assert FantraxScraper(_make_config()).get_league_name() is None
+
+
+# ---------------------------------------------------------------------------
+# SleeperScraper
+# ---------------------------------------------------------------------------
+
+def _sleeper_config(**overrides):
+    config = {'league_id': SLEEPER_LEAGUE_ID, 'members': {}}
+    config.update(overrides)
+    return config
+
+
+def test_sleeper_login_fetches_league_rosters_and_users(monkeypatch):
+    calls = patch_sleeper_api(monkeypatch)
+    scraper = SleeperScraper(_sleeper_config())
+
+    wrapper = scraper.login()
+
+    assert wrapper['league_id'] == SLEEPER_LEAGUE_ID
+    # Every endpoint is asked about the configured league exactly once.
+    assert calls['league_id'] == [SLEEPER_LEAGUE_ID]
+    assert calls['rosters'] == [SLEEPER_LEAGUE_ID]
+    assert calls['users'] == [SLEEPER_LEAGUE_ID]
+    assert scraper.loaded is True
+
+
+def test_sleeper_standings_rank_by_wins_then_points(monkeypatch):
+    # Two rosters tied at 8-6 must be split by points for, not roster order.
+    users, rosters = make_sleeper_season((
+        ('u1', 'alpha', 'Alpha', 1, 8, 6, 1700.0),
+        ('u2', 'bravo', 'Bravo', 2, 10, 4, 1500.0),
+        ('u3', 'charlie', 'Charlie', 3, 8, 6, 1900.0),
+    ))
+    patch_sleeper_api(monkeypatch, users=users, rosters=rosters)
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    # 10 wins first, then the 8-win pair ordered by points for.
+    assert scraper.standings == {'2': 1, '3': 2, '1': 3}
+
+
+def test_sleeper_get_members_shape(monkeypatch):
+    users, rosters = make_sleeper_season((
+        ('u1', 'alpha', 'Alpha Team', 1, 10, 4, 1800.0),
+        ('u2', 'bravo', 'Bravo Team', 2, 4, 10, 1500.0),
+    ))
+    patch_sleeper_api(monkeypatch, users=users, rosters=rosters)
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    members = scraper.get_members()
+
+    # Keyed by user_id -- the account id, stable across seasons -- while
+    # team_id is the per-season roster id, as a string.
+    assert set(members) == {'u1', 'u2'}
+    assert members['u1'] == {
+        'team_id': '1',
+        'curr_name': 'Alpha Team',
+        'curr_short': 'alpha',
+        'commish': True,
+        'standing': 1,
+    }
+    assert members['u2']['team_id'] == '2'
+    assert members['u2']['standing'] == 2
+
+
+def test_sleeper_get_members_falls_back_to_display_name(monkeypatch):
+    # make_season drops the last member's team_name; Sleeper only stores one
+    # once a manager sets it.
+    patch_sleeper_api(monkeypatch)
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    members = scraper.get_members()
+    last = members['859950573120794624']
+    assert last['curr_name'] == 'seireikhaan'
+    assert last['curr_short'] == 'seireikhaan'
+
+
+def test_sleeper_get_members_marks_only_the_commissioner(monkeypatch):
+    patch_sleeper_api(monkeypatch)
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    members = scraper.get_members()
+    # is_owner comes back None rather than False for non-commissioners, so it
+    # has to be coerced.
+    assert members['738089321269194752']['commish'] is True
+    assert all(m['commish'] is False for k, m in members.items()
+               if k != '738089321269194752')
+
+
+def test_sleeper_get_members_skips_users_without_a_roster(monkeypatch):
+    users, rosters = make_sleeper_season((
+        ('u1', 'alpha', 'Alpha', 1, 5, 5, 1500.0),
+    ))
+    users.append(make_user('spectator', 'watcher'))
+    patch_sleeper_api(monkeypatch, users=users, rosters=rosters)
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    # A user in the league chat but not playing has no roster to rate.
+    assert set(scraper.get_members()) == {'u1'}
+
+
+def test_sleeper_season_length_and_playoff_start(monkeypatch):
+    patch_sleeper_api(monkeypatch, league=make_league(playoff_week_start=15,
+                                                     last_scored_leg=17))
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    assert scraper.get_current_season_length() == 17
+    assert scraper.get_playoff_start() == 15
+
+
+@pytest.mark.parametrize('absent', [0, None])
+def test_sleeper_season_length_ignores_the_leg(monkeypatch, absent):
+    # 'leg' is the week the league is on, not the number it has scored, so a
+    # preseason league reports leg 1 with nothing played. Counting it would
+    # rate a week that was never played.
+    patch_sleeper_api(monkeypatch,
+                      league=make_league(last_scored_leg=absent, leg=1))
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+    assert scraper.get_current_season_length() == 0
+
+
+def test_sleeper_season_length_counts_only_scored_weeks(monkeypatch):
+    # Mid-season: week 5 is under way, four are on the books.
+    patch_sleeper_api(monkeypatch, league=make_league(last_scored_leg=4, leg=5))
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+    assert scraper.get_current_season_length() == 4
+
+
+def test_sleeper_playoff_start_defaults_when_unset(monkeypatch):
+    # Sleeper reports 0 until the schedule exists.
+    patch_sleeper_api(monkeypatch, league=make_league(playoff_week_start=0))
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+    assert scraper.get_playoff_start() == PLAYOFF_START
+
+
+def test_sleeper_playoff_start_before_login_is_default():
+    assert SleeperScraper(_sleeper_config()).get_playoff_start() == PLAYOFF_START
+
+
+def test_sleeper_league_name(monkeypatch):
+    patch_sleeper_api(monkeypatch, league=make_league(name='Die Nasty'))
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+    assert scraper.get_league_name() == 'Die Nasty'
+
+
+def test_sleeper_league_name_before_login_is_none():
+    assert SleeperScraper(_sleeper_config()).get_league_name() is None
+
+
+def test_sleeper_get_scoreboard_attaches_owner_ids(monkeypatch):
+    users, rosters = make_sleeper_season((
+        ('u1', 'alpha', 'Alpha', 1, 5, 5, 1500.0),
+        ('u2', 'bravo', 'Bravo', 2, 5, 5, 1500.0),
+    ))
+    week = make_matchups([((1, 120.0), (2, 100.0))])
+    calls = patch_sleeper_api(monkeypatch, users=users, rosters=rosters,
+                              matchups=week)
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    board = scraper.get_scoreboard(3)
+
+    assert calls['weeks'] == [(SLEEPER_LEAGUE_ID, 3)]
+    # The formatter only receives the scoreboard, so the roster -> owner
+    # mapping has to ride along on it.
+    assert {entry['owner_id'] for entry in board} == {'u1', 'u2'}
+    assert scraper.current_matchup is board
+
+
+def test_sleeper_get_scoreboard_does_not_mutate_the_payload(monkeypatch):
+    week = make_matchups([((1, 120.0), (2, 100.0))])
+    users, rosters = make_sleeper_season((
+        ('u1', 'alpha', 'Alpha', 1, 5, 5, 1500.0),
+        ('u2', 'bravo', 'Bravo', 2, 5, 5, 1500.0),
+    ))
+    patch_sleeper_api(monkeypatch, users=users, rosters=rosters, matchups=week)
+    scraper = SleeperScraper(_sleeper_config())
+    scraper.login()
+
+    scraper.get_scoreboard(1)
+
+    assert all('owner_id' not in entry for entry in week)
+
+
+def test_sleeper_missing_dependency_points_at_the_extra(monkeypatch):
+    # The sleeper client is an optional extra, imported lazily, so a
+    # Fantrax-only install must fail with a usable message rather than an
+    # opaque ImportError at module scope.
+    import sys
+    monkeypatch.setitem(sys.modules, 'sleeper.api', None)
+    with pytest.raises(ImportError, match=r'elo-system\[sleeper\]'):
+        SleeperScraper(_sleeper_config()).login()

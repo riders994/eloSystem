@@ -96,7 +96,10 @@ class FakeDB:
             column, value = (part.strip() for part in condition.split('='))
             frame = frame[frame[column] == int(value)]
             frame = frame.rename(columns={'elo': 'rating', 'score': 'rating'})
-            frame = frame[['team_id', 'week', 'rating']]
+            # Honour whichever id the query actually selected: seasonal facts
+            # come back by team, dynasty facts by manager.
+            member_col = sql.split('SELECT')[1].split(',')[0].strip()
+            frame = frame[[member_col, 'week', 'rating']]
         if index_col is not None:
             frame = frame.set_index(index_col)
         return frame
@@ -193,8 +196,51 @@ def test_init_schema_override_from_config(db):
     assert obj.schema == 'custom_schema'
 
 
-def test_init_pulls_every_dim(db):
+def test_init_pulls_nothing(db):
+    # Construction must stay offline: EloSystem builds every configured
+    # backend up front, so an unreachable DB would otherwise break the CSV
+    # workflow too.
     obj = make_elosql(db)
+    assert obj.dim_tables == {}
+
+
+def test_init_does_not_connect(db, monkeypatch):
+    # With no connector handed in, the backend still must not dial out until
+    # something actually reads from it.
+    monkeypatch.setattr(elo_data, 'connect',
+                        lambda *a, **k: pytest.fail('connect() at construction'))
+    obj = EloSQL({'conn_dict': VALID_CONN}, LEAGUE_CONFIG, connector=None)
+    assert obj._conn is None
+
+
+def test_connection_opens_on_first_use(db, monkeypatch):
+    opened = []
+
+    def fake_connect(conn_dict):
+        opened.append(conn_dict)
+        return FakeConn()
+
+    monkeypatch.setattr(elo_data, 'connect', fake_connect)
+    obj = EloSQL({'conn_dict': VALID_CONN}, LEAGUE_CONFIG, connector=None)
+    assert opened == []
+    assert isinstance(obj.conn, FakeConn)
+    assert len(opened) == 1
+    obj.conn                       # reused, not reopened
+    assert len(opened) == 1
+
+
+def test_dims_pull_on_first_read(db):
+    obj = make_elosql(db)
+    obj._dim('team')
+    assert 'dim_team' in obj.dim_tables
+    # Only what was asked for; the rest stay unfetched until they are needed.
+    assert 'dim_manager' not in obj.dim_tables
+
+
+def test_every_dim_pulls_when_reached(db):
+    obj = make_elosql(db)
+    for dim in DIM_COLUMNS:
+        obj._dim(dim.removeprefix('dim_'))
     assert set(obj.dim_tables) == set(DIM_COLUMNS)
 
 
@@ -212,12 +258,14 @@ def test_init_does_not_call_connect_when_connector_given(db, monkeypatch):
 
 def test_pull_dim_skips_when_present_and_not_overwrite(db, monkeypatch):
     obj = make_elosql(db)
+    obj._dim('team')          # first read fetches it
     monkeypatch.setattr(elo_data.pd, 'read_sql_query', lambda *a, **k: pytest.fail('read'))
     assert obj._pull_dim('team', overwrite=False) is True
 
 
 def test_pull_dim_reads_when_overwrite(db):
     obj = make_elosql(db)
+    obj._dim('team')
     obj.dim_tables['dim_team'] = pd.DataFrame({'sentinel': [1]})
     assert obj._pull_dim('team', overwrite=True) is True
     assert 'sentinel' not in obj.dim_tables['dim_team'].columns
@@ -225,6 +273,7 @@ def test_pull_dim_reads_when_overwrite(db):
 
 def test_pull_dim_indexes_on_the_surrogate_id(db):
     obj = make_elosql(db)
+    obj._dim('team')
     assert obj.dim_tables['dim_team'].index.name == 'team_id'
 
 
@@ -939,3 +988,170 @@ def test_a_missing_name_never_blanks_a_stored_one(db):
     obj.set_league_config(LEAGUE_CONFIG)  # no league_name anywhere
     obj.sync_dims()
     assert obj._dim('league')['league_name'].iloc[0] == "Mao's Macho Mandarins"
+
+
+# ---------------------------------------------------------------------------
+# departed managers in the dynasty facts
+# ---------------------------------------------------------------------------
+
+DEPARTED_CONFIG = {
+    'platform': 'fantrax',
+    'league_type': 'nba',
+    'current_sports_year': 2025,
+    'seasons': {
+        # Lengths put dynasty weeks 0-1 in 2024 and week 2 in 2025
+        # (_dynasty_week_years allots current_season_length + 1 per season).
+        2024: {
+            'league_id': 'lg2024',
+            'current_season_length': 1,
+            'league_members': {
+                'Nate': {'team_id': 't1', 'curr_name': 'Nate FC',
+                         'short_name': 'NAT', 'is_commish': True},
+                'gone': {'team_id': 't2', 'curr_name': 'Gone FC',
+                         'short_name': 'GON', 'is_commish': False},
+            },
+        },
+        2025: {
+            'league_id': 'lg2025',
+            'current_season_length': 0,
+            # 'gone' has left; only Nate is on the roster.
+            'league_members': {
+                'Nate': {'team_id': 't1', 'curr_name': 'Nate FC',
+                         'short_name': 'NAT', 'is_commish': True},
+            },
+        },
+    },
+}
+
+
+def _departed_dynasty():
+    """A dynasty frame whose weeks span both seasons, for two members."""
+    return pd.DataFrame(
+        {'week_0': [1500.0, 1500.0], 'week_1': [1520.0, 1480.0],
+         'week_2': [1512.0, 1488.0]},
+        index=['Nate', 'gone'],
+    )
+
+
+def test_dynasty_row_for_a_departed_manager_carries_no_team(db):
+    obj = make_elosql(db, league_config=DEPARTED_CONFIG)
+    obj.publish({'config': DEPARTED_CONFIG, 'dynasty_elo': _departed_dynasty()})
+
+    written = [f for t, f in db.replaces if t == 'fact_dynasty_elos'][-1]
+    managers = obj._dim('manager').set_index('display_name')['manager_id']
+    gone = written[written['manager_id'] == managers['gone']]
+
+    # 'gone' played 2024 (weeks 0-1) but not 2025 (week 2).
+    assert not gone.empty
+    played = gone[gone['week'] < 2]
+    after = gone[gone['week'] == 2]
+    assert played['team_id'].notna().all(), 'a season they played must name their team'
+    assert after['team_id'].isna().all() or (after['team_id'].to_numpy() == None).all(), \
+        'a season they were not in must carry no team id'
+
+
+def test_departed_manager_rating_survives_the_dynasty_round_trip(db):
+    obj = make_elosql(db, league_config=DEPARTED_CONFIG)
+    dynasty = _departed_dynasty()
+    obj.publish({'config': DEPARTED_CONFIG, 'dynasty_elo': dynasty})
+
+    loaded = obj.load_frames('dynasty_elo')['dynasty_elo']
+    # Every cell comes back, including the weeks after 'gone' left -- those
+    # ratings are what keeps the league average at 1500.
+    aligned = loaded.reindex(index=dynasty.index, columns=dynasty.columns)
+    assert int(aligned.notna().sum().sum()) == int(dynasty.notna().sum().sum())
+    pd.testing.assert_frame_equal(aligned.sort_index(), dynasty.sort_index(),
+                                  check_names=False)
+
+
+def test_seasonal_facts_still_require_a_team_that_season(db):
+    # Only the dynasty facts relax the team join; a seasonal rating belongs to
+    # a team inside one season and must still resolve to one.
+    obj = make_elosql(db, league_config=DEPARTED_CONFIG)
+    obj.publish({'config': DEPARTED_CONFIG,
+                 'seasonal_elo': {2025: _frame(['Nate', 'gone'], 2)}})
+
+    written = [f for t, f in db.replaces if t == 'fact_seasonal_elos'][-1]
+    assert written['team_id'].notna().all()
+    managers = obj._dim('manager').set_index('display_name')['manager_id']
+    # 'gone' is not on the 2025 roster, so has no 2025 seasonal rating.
+    assert managers.get('gone') not in set(written['manager_id'])
+
+
+# ---------------------------------------------------------------------------
+# several leagues on the same platform
+# ---------------------------------------------------------------------------
+
+def _nba_league(platform_league_id, members):
+    return {
+        'platform': 'fantrax', 'league_type': 'nba', 'current_sports_year': 2025,
+        'seasons': {2025: {'league_id': platform_league_id,
+                           'current_season_length': 1,
+                           'league_members': members}},
+    }
+
+
+LEAGUE_A = _nba_league('abc123', {
+    'nate': {'team_id': 't1', 'curr_name': 'A One', 'is_commish': True},
+    'abe': {'team_id': 't2', 'curr_name': 'A Two', 'is_commish': False},
+})
+# 'nate' plays in both; the platform team id t1 is reused, deliberately.
+LEAGUE_B = _nba_league('xyz789', {
+    'nate': {'team_id': 't1', 'curr_name': 'B One', 'is_commish': False},
+    'zoe': {'team_id': 't9', 'curr_name': 'B Two', 'is_commish': True},
+})
+
+
+def _publish_both(db):
+    out = []
+    for conf, members in ((LEAGUE_A, ['nate', 'abe']), (LEAGUE_B, ['nate', 'zoe'])):
+        obj = make_elosql(db, league_config=conf)
+        obj.publish({'config': conf, 'seasonal_elo': {2025: _frame(members, 2)}})
+        out.append(obj)
+    return out
+
+
+def test_two_leagues_on_one_platform_get_their_own_league_row(db):
+    a, b = _publish_both(db)
+    assert a.get_lid() != b.get_lid()
+    leagues = db.tables['dim_league']
+    assert len(leagues) == 2
+    assert set(leagues['platform']) == {'fantrax'}
+
+
+def test_two_leagues_get_their_own_online_league_per_season(db):
+    _publish_both(db)
+    online = db.tables['dim_online_league']
+    assert len(online) == 2
+    assert set(online['platform_league_id']) == {'abc123', 'xyz789'}
+    assert online['league_id'].nunique() == 2
+
+
+def test_a_manager_in_two_leagues_is_one_manager(db):
+    # display_name is a platform account, so the same owner in two leagues is
+    # the same person and must not be duplicated.
+    _publish_both(db)
+    managers = db.tables['dim_manager']
+    assert sorted(managers['display_name']) == ['abe', 'nate', 'zoe']
+    assert managers['manager_id'].nunique() == 3
+
+
+def test_a_manager_in_two_leagues_has_a_team_in_each(db):
+    _publish_both(db)
+    managers = db.tables['dim_manager'].set_index('display_name')['manager_id']
+    teams = db.tables['dim_team']
+    nate = teams[teams['manager_id'] == managers['nate']]
+    # One team per league, even though both reuse the platform team id 't1'.
+    assert len(nate) == 2
+    assert nate['online_league_id'].nunique() == 2
+    assert set(nate['platform_team_id']) == {'t1'}
+    assert nate['team_id'].nunique() == 2
+
+
+def test_facts_stay_scoped_to_their_own_league(db):
+    _publish_both(db)
+    facts = db.tables['fact_seasonal_elos']
+    teams = db.tables['dim_team'].set_index('team_id')['online_league_id']
+    # Every fact row sits under the online league its team belongs to.
+    assert (facts['team_id'].map(teams) == facts['online_league_id']).all()
+    assert facts['online_league_id'].nunique() == 2

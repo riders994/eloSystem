@@ -1,10 +1,15 @@
-"""Tests for elo_system.tools.formatter (fantrax_formatter and roto_calc)."""
+"""Tests for elo_system.tools.formatter (fantrax_formatter, sleeper_formatter
+and roto_calc)."""
 import numpy as np
 import pandas as pd
 import pytest
 
 from elo_system.tools.basics import ROTO_COLS
-from elo_system.tools.helpers.formatter import fantrax_formatter, roto_calc
+from elo_system.tools.helpers.formatter import (
+    fantrax_formatter,
+    roto_calc,
+    sleeper_formatter,
+)
 
 from tests.mocks.fantrax import (
     NBA_CATEGORIES,
@@ -13,6 +18,7 @@ from tests.mocks.fantrax import (
     make_scoring_period,
     make_team,
 )
+from tests.mocks.sleeper import make_matchup as make_sleeper_matchup
 
 # ---------------------------------------------------------------------------
 # Hand-built 4-team week: 2 matchups, no ties in any category.
@@ -195,3 +201,101 @@ def test_roto_calc_matches_independent_pandas_ranking():
     )
     result = roto_calc(frame.copy())
     assert (result['roto'] == expected.astype(int)).all()
+
+
+# ---------------------------------------------------------------------------
+# sleeper_formatter
+# ---------------------------------------------------------------------------
+
+def _sleeper_week(entries):
+    """Build a scoreboard as SleeperScraper hands it to the formatter.
+
+    ``entries`` is an iterable of (owner_id, roster_id, points, matchup_id).
+    """
+    return [
+        dict(make_sleeper_matchup(roster_id, points, matchup_id), owner_id=owner_id)
+        for owner_id, roster_id, points, matchup_id in entries
+    ]
+
+
+def test_sleeper_formatter_pairs_by_matchup_id():
+    board = _sleeper_week([
+        ('u1', 1, 120.0, 1),
+        ('u2', 2, 80.0, 1),
+        ('u3', 3, 90.0, 2),
+        ('u4', 4, 110.0, 2),
+    ])
+    frame = sleeper_formatter('nfl', board)
+
+    assert list(frame.index) == ['u1', 'u2', 'u3', 'u4']
+    # opponent is the other side's roster id, as a string, because
+    # EloLeague._rename maps team_id -> member id through it.
+    assert frame.loc['u1', 'opponent'] == '2'
+    assert frame.loc['u2', 'opponent'] == '1'
+    assert frame.loc['u3', 'opponent'] == '4'
+    assert frame.loc['u4', 'opponent'] == '3'
+
+
+def test_sleeper_formatter_true_score_is_the_points_share():
+    board = _sleeper_week([('u1', 1, 120.0, 1), ('u2', 2, 80.0, 1)])
+    frame = sleeper_formatter('nfl', board)
+
+    assert frame.loc['u1', 'true_score'] == pytest.approx(0.6)
+    assert frame.loc['u2', 'true_score'] == pytest.approx(0.4)
+    # Both sides of a matchup always share out to a whole point.
+    assert frame['true_score'].sum() == pytest.approx(1.0)
+
+
+def test_sleeper_formatter_keeps_raw_points_for_the_median_mode():
+    board = _sleeper_week([('u1', 1, 120.5, 1), ('u2', 2, 80.25, 1)])
+    frame = sleeper_formatter('nfl', board)
+    assert frame.loc['u1', 'scores'] == pytest.approx(120.5)
+    assert frame.loc['u2', 'scores'] == pytest.approx(80.25)
+
+
+def test_sleeper_formatter_null_matchup_id_has_no_opponent():
+    # Sleeper leaves matchup_id null for teams idle that week -- byes, and
+    # everyone eliminated from the bracket.
+    board = _sleeper_week([
+        ('u1', 1, 120.0, 1),
+        ('u2', 2, 80.0, 1),
+        ('u3', 3, 95.0, None),
+    ])
+    frame = sleeper_formatter('nfl', board)
+
+    # pandas may render the absent opponent as None or NaN; what the
+    # calculator keys on is that it is not a member id.
+    assert not isinstance(frame.loc['u3', 'opponent'], str)
+    assert np.isnan(frame.loc['u3', 'true_score'])
+    # The points survive, so the median mode still rates the idle team.
+    assert frame.loc['u3', 'scores'] == pytest.approx(95.0)
+
+
+def test_sleeper_formatter_scoreless_matchup_is_a_draw():
+    # An unplayed week comes back 0-0, which would otherwise divide by zero.
+    board = _sleeper_week([('u1', 1, 0.0, 1), ('u2', 2, 0.0, 1)])
+    frame = sleeper_formatter('nfl', board)
+    assert frame.loc['u1', 'true_score'] == 0.5
+    assert frame.loc['u2', 'true_score'] == 0.5
+
+
+def test_sleeper_formatter_missing_points_treated_as_zero():
+    board = [dict(make_sleeper_matchup(1, None, 1), owner_id='u1'),
+             dict(make_sleeper_matchup(2, 100.0, 1), owner_id='u2')]
+    frame = sleeper_formatter('nfl', board)
+    assert frame.loc['u1', 'scores'] == 0.0
+    assert frame.loc['u1', 'true_score'] == pytest.approx(0.0)
+
+
+def test_sleeper_formatter_unpaired_matchup_id_has_no_opponent():
+    # A lone entry carrying a matchup_id (a roster removed mid-season) has
+    # nobody to be rated against.
+    board = _sleeper_week([('u1', 1, 120.0, 7)])
+    frame = sleeper_formatter('nfl', board)
+    assert not isinstance(frame.loc['u1', 'opponent'], str)
+    assert np.isnan(frame.loc['u1', 'true_score'])
+
+
+def test_sleeper_formatter_non_nfl_returns_empty():
+    board = _sleeper_week([('u1', 1, 120.0, 1), ('u2', 2, 80.0, 1)])
+    assert sleeper_formatter('nba', board).empty

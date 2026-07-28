@@ -98,6 +98,10 @@ FACT_SPECS = {
         'scope': 'league_id',
         'value': 'elo',
         'columns': DYNASTY_DB_COLS,
+        # Dynasty ratings outlive any one season's roster, so a row is
+        # identified by its manager. A manager who has departed keeps a
+        # rating but owns no team in the seasons they were not in.
+        'member_key': 'manager_id',
     },
     'seasonal_elo': {
         'table': 'fact_seasonal_elos',

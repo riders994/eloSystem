@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "elo-system"
 version = "1.1.0"
-description = "Elo rating system for fantasy sports leagues (Fantrax NBA, with multi-season dynasty support)."
+description = "Elo rating system for fantasy sports leagues (Fantrax NBA and Sleeper NFL, with multi-season dynasty support)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -39,7 +39,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Planned Sleeper backend (not yet wired into the scraper layer).
+# The Sleeper backend. SleeperScraper imports it lazily, so Fantrax-only
+# installs do not need it.
 sleeper = ["sleeper>=2.0"]
 dev = [
     "pytest>=8",

@@ -122,3 +122,61 @@ def test_publish_load_is_bit_exact(tmp_path):
 
     loaded = csv.load_frames('seasonal_elo')['seasonal_elo'][2024]
     assert loaded.equals(frame), 'round trip lost precision'
+
+
+def test_read_csv_keeps_numeric_member_ids_as_strings(tmp_path):
+    # Sleeper member ids are all-digit strings; the parser would otherwise
+    # type the index as int64 and the frame would stop matching the string
+    # keys used by league_members and by the SQL backend.
+    out = tmp_path / 'ratings'
+    out.mkdir()
+    (out / '2024_season_elo.csv').write_text(
+        'index,week_0,week_1\n860003302220337152,1500.0,1512.5\n74842634216423424,1500.0,1487.5\n'
+    )
+    csv = EloCSV({'write_loc': 'ratings'}, tmp_path)
+    frames = csv.load_frames('seasonal_elo')
+    frame = frames['seasonal_elo'][2024]
+
+    assert list(frame.index) == ['860003302220337152', '74842634216423424']
+    assert all(isinstance(member, str) for member in frame.index)
+    # The point of the cast: lookups by the string id the config uses work.
+    assert frame.loc['860003302220337152', 'week_1'] == 1512.5
+
+
+# ---------------------------------------------------------------------------
+# per-league directories
+# ---------------------------------------------------------------------------
+
+def test_league_dir_scopes_the_output_directory(tmp_path):
+    csv = EloCSV({'write_loc': 'ratings'}, tmp_path, 'sleeper_nfl')
+    assert csv.out_dir == tmp_path / 'ratings' / 'sleeper_nfl'
+    assert csv.in_dir == tmp_path / 'ratings' / 'sleeper_nfl'
+    assert csv.out_dir.is_dir()
+
+
+def test_no_league_dir_writes_straight_to_write_loc(tmp_path):
+    csv = EloCSV({'write_loc': 'ratings'}, tmp_path)
+    assert csv.out_dir == tmp_path / 'ratings'
+
+
+def test_two_leagues_do_not_overwrite_each_other(tmp_path):
+    # The frames are named by season alone, so a shared directory would have
+    # one league clobbering the other's 2024.
+    frame_a = pd.DataFrame({'week_0': [1500.0]}, index=['alice'])
+    frame_b = pd.DataFrame({'week_0': [1400.0]}, index=['bob'])
+
+    a = EloCSV({'write_loc': 'ratings'}, tmp_path, 'league_a')
+    b = EloCSV({'write_loc': 'ratings'}, tmp_path, 'league_b')
+    a.publish({'seasonal_elo': {2024: frame_a}})
+    b.publish({'seasonal_elo': {2024: frame_b}})
+
+    assert (tmp_path / 'ratings' / 'league_a' / '2024_season_elo.csv').exists()
+    assert (tmp_path / 'ratings' / 'league_b' / '2024_season_elo.csv').exists()
+    assert list(a.load_frames('seasonal_elo')['seasonal_elo'][2024].index) == ['alice']
+    assert list(b.load_frames('seasonal_elo')['seasonal_elo'][2024].index) == ['bob']
+
+
+def test_league_dir_respects_a_separate_read_loc(tmp_path):
+    csv = EloCSV({'write_loc': 'out', 'read_loc': 'in'}, tmp_path, 'lg')
+    assert csv.out_dir == tmp_path / 'out' / 'lg'
+    assert csv.in_dir == tmp_path / 'in' / 'lg'

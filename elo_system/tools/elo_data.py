@@ -36,6 +36,7 @@ class EloCSV(DataBase):
     def __init__(
             self, config: dict
             , working_directory: Path
+            , league_dir: str | None = None
     ) -> None:
         super().__init__(
             config
@@ -49,11 +50,21 @@ class EloCSV(DataBase):
         self.read_loc = config.get('read_loc', self.write_loc)
         self.extension = config.get('extension', '.csv')
         self.wd = working_directory
+        # One CSV config serves every league, so each gets its own directory
+        # under it -- the frames are named by season alone, and two leagues
+        # sharing a directory would overwrite each other.
+        self.league_dir = league_dir
         # Ensure the ratings (output) directory exists before any publish.
-        self.out_dir = Path(self.wd, self.write_loc)
+        self.out_dir = self._scoped(self.write_loc)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         # Input directory for load_frames (defaults to the output directory).
-        self.in_dir = Path(self.wd, self.read_loc)
+        self.in_dir = self._scoped(self.read_loc)
+
+    def _scoped(self, location: str) -> Path:
+        parts = [self.wd, location]
+        if self.league_dir:
+            parts.append(self.league_dir)
+        return Path(*parts)
 
     def _publish_dynasty_elo(self, frame: pd.DataFrame) -> None:
         file_path = Path(self.out_dir, self.dynasty_fstr.format(ext=self.extension))
@@ -75,7 +86,14 @@ class EloCSV(DataBase):
         # every rating: the default parser is up to an ulp out, which is enough
         # to make a frame read from here differ from the same one read from the
         # SQL backend, where float8 is exact.
-        return pd.read_csv(file_path, index_col=0, float_precision='round_trip')
+        frame = pd.read_csv(file_path, index_col=0, float_precision='round_trip')
+        # The index is the member id, an opaque identifier that happens to be
+        # all digits on some platforms (Sleeper user ids) and not on others
+        # (Fantrax owner names). Left to itself the parser types the first kind
+        # as int64, and the frame stops matching the string keys the league
+        # config and the SQL backend both use.
+        frame.index = frame.index.astype(str)
+        return frame
 
     def _load_single(self, fstr: str) -> pd.DataFrame | None:
         file_path = Path(self.in_dir, fstr.format(ext=self.extension))
@@ -163,10 +181,11 @@ class EloSQL(DataBase):
         if not validate_conn_dict(conn_dict):
             raise ValueError('Incomplete connection details supplied.')
         self.conn_dict = conn_dict
-        if connector is None:
-            self.conn = connect(self.conn_dict)
-        else:
-            self.conn = connector
+        # Connect on first use, not here. Constructing this backend must not
+        # reach the network: EloSystem builds every configured backend up
+        # front, so an unreachable database would otherwise take the CSV
+        # workflow down with it.
+        self._conn = connector
 
         self.schema = self.conn_dict.get('schema', config.get('schema', 'fantasy_sports'))
 
@@ -187,18 +206,40 @@ class EloSQL(DataBase):
         for dim, cols in config.get('anon_columns', dict()).items():
             self.anon_cols.setdefault(dim, dict()).update(cols)
 
+        # Pulled lazily, one dim at a time, the first time each is read.
         self.dim_tables: dict[str, pd.DataFrame] = {}
-        self.reset_dims()
 
         self.league_config: dict[str, Any] = {}
         self.seasons: dict[Any, Any] = {}
         self.platform = None
         self.current_sports_year = None
-        self.league_id = -1
+        self._league_id = -1
+        self._league_id_stale = True
         self.league_name = None
-        self.set_league_config(league_config)
+        # Store the config without resolving which dim_league row it is --
+        # that needs the DB, and construction stays offline.
+        self._store_league_config(league_config)
 
         self.current_frame = pd.DataFrame()
+
+    @property
+    def conn(self):
+        """The database connection, opened on first use."""
+        if self._conn is None:
+            self._conn = connect(self.conn_dict)
+        return self._conn
+
+    @property
+    def league_id(self) -> int:
+        """Which dim_league row this config is, resolved against the DB once."""
+        if self._league_id_stale:
+            self._resolve_league_id()
+        return self._league_id
+
+    @league_id.setter
+    def league_id(self, value: int) -> None:
+        self._league_id = value
+        self._league_id_stale = False
 
     # ------------------------------------------------------------------
     # dimension tables
@@ -212,9 +253,18 @@ class EloSQL(DataBase):
     def _dim_key(dim: str) -> str:
         return '{}_id'.format(dim)
 
+    def _dim_frame(self, dim: str) -> pd.DataFrame:
+        """The cached dim table, pulled from the DB the first time it is read.
+
+        Every dim access goes through here, which is what keeps construction
+        offline: nothing is fetched until something actually needs a row.
+        """
+        self._pull_dim(dim, False)
+        return self.dim_tables[self._dim_table(dim)]
+
     def _dim(self, dim: str) -> pd.DataFrame:
         """The cached dim table with its surrogate id back as a column."""
-        return self.dim_tables[self._dim_table(dim)].reset_index()
+        return self._dim_frame(dim).reset_index()
 
     # ------------------------------------------------------------------
     # anonymisation
@@ -319,7 +369,7 @@ class EloSQL(DataBase):
         return self.pull_dims(overwrite=True)
 
     def _push_dim(self, dim: str) -> bool:
-        frame = self.dim_tables[self._dim_table(dim)]
+        frame = self._dim_frame(dim)
         if frame.empty:
             return True
         upsert_dataframe(
@@ -349,7 +399,7 @@ class EloSQL(DataBase):
     def _next_dim_id(self, dim: str) -> int:
         # The dim tables carry no sequence defaults, so surrogate ids are minted
         # here off whatever the cached table already holds.
-        index = self.dim_tables[self._dim_table(dim)].index
+        index = self._dim_frame(dim).index
         if len(index) == 0:
             return 0
         return int(index.max()) + 1
@@ -358,7 +408,7 @@ class EloSQL(DataBase):
         if not rows:
             return
         table = self._dim_table(dim)
-        existing = self.dim_tables[table]
+        existing = self._dim_frame(dim)
         new = pd.DataFrame.from_records(rows).set_index(self._dim_key(dim))
         combined = new if existing.empty else pd.concat([existing, new])
         # Staged rows may omit nullable columns; keep the table's own column
@@ -381,6 +431,7 @@ class EloSQL(DataBase):
         """
         if not rows:
             return
+        self._dim_frame(dim)
         table = self._dim_table(dim)
         updates = pd.DataFrame.from_records(rows).set_index(self._dim_key(dim))
         # DataFrame.update propagates only non-NA values, which is exactly the
@@ -397,11 +448,16 @@ class EloSQL(DataBase):
         publish() calls this again with the config off the payload, so seasons
         added since construction are picked up before anything is written.
         """
+        self._store_league_config(league_config)
+        return self._resolve_league_id()
+
+    def _store_league_config(self, league_config: dict[str, Any] | None) -> None:
+        """Adopt the config without touching the DB; the id resolves on read."""
         self.league_config = league_config or dict()
         self.seasons = self.league_config.get('seasons', dict())
         self.platform = self.league_config.get('platform')
         self.current_sports_year = self.league_config.get('current_sports_year')
-        return self._resolve_league_id()
+        self._league_id_stale = True
 
     def _platform_league_ids(self) -> set[str]:
         return {s['league_id'] for s in self.seasons.values() if s.get('league_id')}
@@ -570,7 +626,7 @@ class EloSQL(DataBase):
         columns refreshed, so a rename, a handover or a moved standing lands
         without disturbing anything else on the row.
         """
-        teams = self.dim_tables[self._dim_table('team')]
+        teams = self._dim_frame('team')
         existing: dict[tuple, int] = {}
         if not teams.empty:
             existing.update({
@@ -651,7 +707,7 @@ class EloSQL(DataBase):
         return int(matched['team_id'].max())
 
     def _set_team_column(self, team_id: int, column: str, value: Any, push: bool) -> int:
-        table = self.dim_tables[self._dim_table('team')]
+        table = self._dim_frame('team')
         if team_id not in table.index:
             raise KeyError('No dim_team row with team_id {}'.format(team_id))
         # Object dtype takes a clear-to-None as readily as a value, whatever
@@ -774,12 +830,23 @@ class EloSQL(DataBase):
                 week += 1
         return weeks
 
-    def _attach_ids(self, long: pd.DataFrame) -> pd.DataFrame:
-        """Resolve the member/week rows of a pivoted frame onto their dim ids."""
+    def _attach_ids(self, long: pd.DataFrame, keep_teamless: bool = False) -> pd.DataFrame:
+        """Resolve the member/week rows of a pivoted frame onto their dim ids.
+
+        With keep_teamless, a member who did not play the season a week falls
+        in still gets a row, carrying no team id. That is the dynasty case: a
+        manager who has left keeps a rating -- it goes on regressing toward
+        the mean, and the league average depends on it -- but they own no team
+        in a season they were not in, so there is no team to point at. Their
+        identity on the row is the manager id, which is what the dynasty facts
+        are read back by.
+        """
         member_teams = self._member_teams()
         teams = self._dim('team')
         managers = self._dim('manager')
-        if long.empty or member_teams.empty or teams.empty or managers.empty:
+        if long.empty or managers.empty:
+            return pd.DataFrame()
+        if not keep_teamless and (member_teams.empty or teams.empty):
             return pd.DataFrame()
 
         # A member can only own one team per season and a manager only holds one
@@ -793,21 +860,38 @@ class EloSQL(DataBase):
             subset='display_name', keep='last'
         ).rename(columns={'display_name': 'manager_name'})
 
-        keyed = long.merge(member_teams, on=['member', 'league_year'], how='inner')
+        how = 'left' if keep_teamless else 'inner'
+        keyed = long.merge(member_teams, on=['member', 'league_year'], how=how)
         keyed = keyed.merge(
             teams[['team_id', 'platform_team_id', 'league_year', 'manager_id', 'online_league_id']],
             on=['platform_team_id', 'league_year'],
-            how='inner'
+            how=how
         )
+        if keep_teamless:
+            # A teamless row came through the left joins with no manager id, so
+            # resolve it straight off the member name instead of via the team.
+            by_member = managers.set_index('manager_name')['manager_id']
+            keyed['manager_id'] = keyed['manager_id'].fillna(
+                keyed['member'].map(by_member)
+            )
+            keyed = keyed.dropna(subset='manager_id')
+            keyed['manager_id'] = keyed['manager_id'].astype('int64')
         keyed = keyed.merge(managers[['manager_id', 'manager_name']], on='manager_id', how='inner')
         keyed['league_id'] = self.league_id
         return keyed
 
     def _shape_frame(self, destination: str, long: pd.DataFrame) -> pd.DataFrame:
         spec = FACT_SPECS[destination]
-        shaped = self._attach_ids(long).rename(
+        keep_teamless = spec.get('member_key') == 'manager_id'
+        shaped = self._attach_ids(long, keep_teamless=keep_teamless).rename(
             columns={'rating': spec['value']}
         ).reindex(columns=spec['columns'])
+        if keep_teamless and 'team_id' in shaped.columns:
+            # A missing team has to reach the DB as a real NULL; left as NaN it
+            # is a float and will not go into an integer column.
+            shaped['team_id'] = shaped['team_id'].astype('object').where(
+                shaped['team_id'].notna(), None
+            )
         # manager_name is a denormalised copy of the dim's member identity, so
         # it takes the token that dim's push already minted -- anonymising here
         # would rewrite dim_manager's map and repoint every one of its tokens.
@@ -864,21 +948,29 @@ class EloSQL(DataBase):
     # loading
     # ------------------------------------------------------------------
 
-    def _load_post_proc(self, frame: pd.DataFrame) -> pd.DataFrame:
-        """Fact rows carry surrogate team ids; the frames want the member back,
-        which is the platform owner name held in dim_manager.display_name."""
-        teams = self._dim('team')[['team_id', 'manager_id']].dropna()
-        managers = self._dim('manager')[['manager_id', 'display_name']].dropna(subset='manager_id')
-        if teams.empty or managers.empty:
-            return pd.DataFrame(columns=['member', 'week', 'rating'])
+    def _load_post_proc(self, frame: pd.DataFrame, member_key: str = 'team_id') -> pd.DataFrame:
+        """Fact rows carry surrogate ids; the frames want the member back,
+        which is the platform owner name held in dim_manager.display_name.
 
-        teams = teams.astype({'team_id': 'int64', 'manager_id': 'int64'})
+        Seasonal rows reach the manager through their season's team. Dynasty
+        rows name the manager outright, because a departed manager's later
+        weeks have no team to route through.
+        """
+        managers = self._dim('manager')[['manager_id', 'display_name']].dropna(subset='manager_id')
+        if managers.empty:
+            return pd.DataFrame(columns=['member', 'week', 'rating'])
         managers = managers.astype({'manager_id': 'int64'})
+
+        if member_key == 'team_id':
+            teams = self._dim('team')[['team_id', 'manager_id']].dropna()
+            if teams.empty:
+                return pd.DataFrame(columns=['member', 'week', 'rating'])
+            teams = teams.astype({'team_id': 'int64', 'manager_id': 'int64'})
+            frame = frame.merge(teams, on='team_id', how='inner')
+        else:
+            frame = frame.dropna(subset=member_key).astype({member_key: 'int64'})
+
         return frame.merge(
-            teams,
-            on='team_id',
-            how='inner'
-        ).merge(
             managers,
             on='manager_id',
             how='inner'
@@ -886,8 +978,10 @@ class EloSQL(DataBase):
 
     def _load_scoped(self, destination: str, scope_id: int) -> pd.DataFrame | None:
         spec = FACT_SPECS[destination]
+        member_key = spec.get('member_key', 'team_id')
         raw = pd.read_sql_query(
             LOAD_QUERIES[spec['value']].format(
+                member_col=member_key,
                 schema=self.schema,
                 table=spec['table'],
                 scope_col=spec['scope'],
@@ -897,7 +991,7 @@ class EloSQL(DataBase):
         )
         if raw.empty:
             return None
-        long = self._load_post_proc(raw)
+        long = self._load_post_proc(raw, member_key)
         if long.empty:
             return None
         return score_unpivot(long)

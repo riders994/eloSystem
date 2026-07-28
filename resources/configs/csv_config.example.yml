@@ -5,3 +5,8 @@ write_loc: ratings
 # Optional:
 # read_loc: ratings      # defaults to write_loc
 # extension: .csv        # output file extension
+
+# write_loc is the base directory; each league's frames land in a
+# subdirectory of it named for its key in sys_config (resources/ratings/
+# die_nasty/2024_season_elo.csv). Override the subdirectory for one league
+# with ratings_dir in that league's ratings config.

@@ -87,17 +87,59 @@ def trin_elo_calc(player_1, player_2, k=60, proba=False):
     return [r1 + k * (score1 - expected[0]), r2 + k * (score2 - expected[1])]
 
 
+def balance_deltas(deltas):
+    """Rescale a week's rating changes so they sum to zero.
+
+    Elo is a closed system: the league's total rating is meant to be the same
+    every week, because what one team gains another loses. The head-to-head
+    calculation gets that for free, since it moves rating between two named
+    opponents. The median calculation does not -- it scores everyone against
+    the field, and the size of a move is driven by the distance from the
+    median, which carries no such guarantee.
+
+    Gains and losses are scaled to their common average rather than shifted by
+    a constant. A shift would conserve the total just as well, but it would
+    push teams near the median across zero -- a team that beat the median
+    would lose rating, which is the one thing the median calculation is
+    supposed to mean. Scaling each side leaves every sign intact.
+    """
+    gains = deltas[deltas > 0].sum()
+    losses = -deltas[deltas < 0].sum()
+    if gains == 0 or losses == 0:
+        # A week nobody won or nobody lost -- every score identical, or a
+        # single team. There is nothing to balance against.
+        return deltas
+    target = (gains + losses) / 2
+    balanced = deltas.copy()
+    balanced[deltas > 0] *= target / gains
+    balanced[deltas < 0] *= target / losses
+    return balanced
+
+
 def median_elo_calc(player_scores, player_elos, k=60, proba=False) -> pd.Series:
     median_elo = np.array(len(player_scores)*[1500])
-    normed_scores = (player_scores - min(player_scores)) / (max(player_scores) - min(player_scores))
+    spread = max(player_scores) - min(player_scores)
+    if spread == 0:
+        # Every team scored the same (or there is only one), so nobody beat
+        # the median and the normalisation would divide by zero. Score the
+        # whole field as exactly median.
+        normed_scores = np.full(len(player_scores), 0.5)
+    else:
+        normed_scores = (player_scores - min(player_scores)) / spread
     median = np.median(normed_scores)
 
     winners = ((np.greater(normed_scores, median).astype(int) - 0.5) * 2).astype(int)
 
     if proba:
         pass
-    return player_elos + (k * (normed_scores - median) * np.log(1 + winners * (normed_scores - median)) * 2.2 /
-            (2.2 + winners * (player_elos - median_elo) / 1000))
+    # Computed positionally, so the balancing below cannot be tripped up by an
+    # index, then added back to whatever the caller passed in.
+    deltas = np.asarray(
+        k * (normed_scores - median) * np.log(1 + winners * (normed_scores - median)) * 2.2 /
+        (2.2 + winners * (np.asarray(player_elos, dtype=float) - median_elo) / 1000),
+        dtype=float,
+    )
+    return player_elos + balance_deltas(deltas)
 
 def str_to_path(filepath: str) -> Path:
     return Path(filepath).expanduser().resolve()
