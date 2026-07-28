@@ -12,8 +12,12 @@ adjustment.
   (`scoring: median`), so a team's week stands or falls on its own score
   rather than on who it was scheduled against; `scoring: default` rates each
   matchup head to head on the two teams' share of the points instead.
-- **Outputs:** per-season and combined-dynasty rating frames, written to CSV
-  (a Postgres backend is scaffolded but not yet wired up).
+- **Outputs:** per-season and combined-dynasty rating frames, written to CSV or
+  published to a Postgres star schema. Either backend can serve as the reader
+  or the writer, and the two round-trip to the same frames. The schema keeps a
+  person (`dim_manager`) separate from the accounts they play under
+  (`dim_manager_platform`), so one manager can be in several leagues, on
+  several Discord servers, across more than one platform.
 
 ## Installation
 

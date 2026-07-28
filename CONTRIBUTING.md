@@ -65,6 +65,16 @@ easy to cover with hand-computed expectations.
   `SleeperScraper._api`.
 - **Adding a persistence backend** (e.g. SQL): subclass `DataBase` and
   implement the `_publish_*` hooks plus `load_frames`, mirroring `EloCSV`.
+- **Adding a dimension** to the SQL schema: `constants.py` mirrors the database,
+  so a new dim needs an entry in `ELO_DIMS`, `ELO_DIM_COLS`, and `ELO_DIM_ORDER`
+  (parents before children -- `ELO_DIMS` is a set and its iteration order does
+  not respect the foreign keys). Add `ELO_DIM_KEYS` too if the key is not a
+  single generated `<dim>_id`: `dim_manager_platform` is keyed on
+  `(manager_id, platform)`, and `_dim_key` returns `None` for such a dim, which
+  is what makes it held unindexed and upserted on the composite conflict target.
+  A table with no unique constraint cannot be reached by `upsert_dataframe`'s
+  `ON CONFLICT` at all and needs `replace_dataframe` over a scope column, the
+  way `LEAGUE_MANAGER_SPEC` handles the league/manager bridge.
 
 ## The fantraxapi fork
 
