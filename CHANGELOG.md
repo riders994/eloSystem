@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-27
+
+Sleeper football, and the rating maths that supporting it turned up.
+
+`SleeperScraper`/`SleeperLeague`/`sleeper_formatter` bring Sleeper NFL leagues
+to parity with Fantrax, verified end to end against a live five-season dynasty:
+scraped over CSV, converted to a dynasty, published to Postgres and read back.
+
+Wiring up the first NFL league exercised `nfl_calculator` and `median_elo_calc`
+for the first time, and they did not hold up. The median calculation was not
+conservative -- it moved the whole league's rating by the skew of each week's
+scores -- and the offseason adjustment froze anyone who left, so a departed
+manager could outrank the live league on a years-old result. Both are fixed,
+and the league average now holds at 1500 at every week of every season and
+across every dynasty boundary.
+
+The major bump is for the config layout: the CSV and SQL configs are now
+shared by every league, and per-league `elo_config.yml` becomes
+`ratings_<league>.yml`, named in `sys_config.yml` under `ratings_configs`.
+
+**Migrating from 1.1.0**
+
+- Rename `elo_config.yml` to a `ratings_<league>.yml` and list it under
+  `ratings_configs` in `sys_config.yml`, with a `default_league`. Drop
+  `elo_league_config_name`.
+- Move existing CSV frames into a subdirectory of `write_loc` named for the
+  league key.
+- `EloSystem.elo_league_config` / `.elo_league_config_loc` are now
+  `.ratings_config` / `.ratings_config_loc`.
+- NFL ratings computed by an earlier version are wrong and should be
+  recomputed; NBA ratings are unaffected.
+
 ### Added
 - **Sleeper backend.** `SleeperScraper` / `SleeperLeague` / `sleeper_formatter`
   bring Sleeper NFL leagues to parity with Fantrax: scraping, seasonal elos,
@@ -212,6 +244,7 @@ SQL backend is additive and will land as minor releases.
 - The Postgres backend (`EloSQL`, `upsert_dataframe`) is scaffolded but not
   yet connected to the pipeline.
 
-[Unreleased]: https://github.com/riders994/eloSystem/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/riders994/eloSystem/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/riders994/eloSystem/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/riders994/eloSystem/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/riders994/eloSystem/releases/tag/v1.0.0
