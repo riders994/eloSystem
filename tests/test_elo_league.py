@@ -480,6 +480,63 @@ def test_change_dynasty_full_flow(league):
     ]
 
 
+def _run_as_dynasty(league, year, weeks):
+    """Rate a season the way a live bot does: prep, seed, then week by week."""
+    league.run_prep(year)
+    league.frame_manager.generate(year, overwrite=False)
+    for week in range(1, weeks + 1):
+        league.run(week, year)
+
+
+def test_dynasty_run_rates_the_season_too(league):
+    league.is_dynasty = True
+    league.config['is_dynasty'] = True
+    _run_as_dynasty(league, 2024, 2)
+    _run_as_dynasty(league, 2025, 3)
+
+    d = league.frame_manager.dynasty_elo
+    s = league.frame_manager.seasonal_elo[2025]
+    assert list(d.columns) == [f'week_{i}' for i in range(7)]
+    assert list(s.columns) == [f'week_{i}' for i in range(4)]
+
+    # The season starts afresh from its own week_0 ...
+    assert (s['week_0'] == 1500.0).all()
+    a1, b1 = elo_step(1500.0, 1500.0, 1, 0)
+    assert s.loc['alice', 'week_1'] == pytest.approx(a1)
+    assert s.loc['bob', 'week_1'] == pytest.approx(b1)
+    # ... while the dynasty frame rates the same result off the carry-over.
+    a4, b4 = elo_step(d.loc['alice', 'week_3'], d.loc['bob', 'week_3'], 1, 0)
+    assert d.loc['alice', 'week_4'] == pytest.approx(a4)
+    assert d.loc['alice', 'week_4'] != pytest.approx(a1)
+
+    # Same seasonal ratings as rating the season outside a dynasty.
+    expected = EloLeague(make_league_config())
+    expected.load()
+    expected.run_season(2025)
+    pd.testing.assert_frame_equal(s, expected.frame_manager.seasonal_elo[2025])
+
+    payload = league.publish()
+    assert payload['seasonal_elo'][2025] is s
+    assert payload['dynasty_elo'] is d
+
+
+def test_dynasty_rerun_backfills_a_season_left_at_week_0(league):
+    # Ratings written before the season was rated alongside the dynasty: the
+    # dynasty frame is complete but the season only has its week_0.
+    league.is_dynasty = True
+    league.config['is_dynasty'] = True
+    _run_as_dynasty(league, 2024, 2)
+    _run_as_dynasty(league, 2025, 3)
+    dynasty_before = league.frame_manager.dynasty_elo.copy()
+    full_season = league.frame_manager.seasonal_elo[2025].copy()
+    league.frame_manager.seasonal_elo[2025] = full_season[['week_0']].copy()
+
+    league.run('0:3', 2025)
+
+    pd.testing.assert_frame_equal(league.frame_manager.seasonal_elo[2025], full_season)
+    pd.testing.assert_frame_equal(league.frame_manager.dynasty_elo, dynasty_before)
+
+
 def test_change_dynasty_noop_when_already_in_state(league):
     assert league.change_dynasty(False) is False
     assert league.is_dynasty is False

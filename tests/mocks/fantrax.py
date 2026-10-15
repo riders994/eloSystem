@@ -119,7 +119,7 @@ def make_matchup(home, away, home_stats=None, away_stats=None, matchup_key='1'):
     )
 
 
-def make_scoring_period(matchups, playoffs=False, name=None):
+def make_scoring_period(matchups, playoffs=False, name=None, complete=True):
     """Mock of ScoringPeriodResult.
 
     ``matchups`` may be a dict keyed by matchup id (like the real
@@ -133,15 +133,18 @@ def make_scoring_period(matchups, playoffs=False, name=None):
         matchups=matchups,
         playoffs=playoffs,
         name=name,
+        complete=complete,
         other_brackets={},
     )
 
 
-def make_season(teams, playoff_flags):
+def make_season(teams, playoff_flags, played=None):
     """Build ``dict[int, scoring_period]`` keyed by 1-based week number,
     mirroring ``fantraxapi.League.scoring_period_results()``.
 
     ``playoff_flags`` is one bool per week (True => playoff week).
+    ``played`` is how many weeks, from the first, are complete; the rest are
+    scheduled but unplayed. Defaults to every week.
     Each week pairs teams[0] vs teams[1], teams[2] vs teams[3], ...
     """
     periods = {}
@@ -151,7 +154,9 @@ def make_season(teams, playoff_flags):
             for i in range(0, len(teams) - 1, 2)
         ]
         name = f"Playoffs - Round {week}" if playoffs else f"Scoring Period {week}"
-        periods[week] = make_scoring_period(matchups, playoffs=playoffs, name=name)
+        complete = played is None or week <= played
+        periods[week] = make_scoring_period(matchups, playoffs=playoffs, name=name,
+                                            complete=complete)
     return periods
 
 

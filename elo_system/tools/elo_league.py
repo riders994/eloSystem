@@ -312,19 +312,22 @@ class EloLeague(LeagueBase):
                     )
                 except AttributeError:
                     raise KeyError('No Dynasty frame initialized')
-            else:
-                try:
-                    self.calculator(
-                        self.frame_manager.seasonal_elo[year],
-                        formatted_scores,
-                        week,
-                        overwrite,
-                        self.k,
-                        scoring=self.scoring
-                    )
-                except KeyError as e:
-                    if e.args[0] == self.current_sports_year:
-                        raise KeyError('Current sports year has no frames')
+            # The season is rated in its own right whether or not the league is
+            # a dynasty: the dynasty frame carries ratings over from one season
+            # to the next, while the seasonal frame starts each season afresh
+            # from its own week_0, and both are published.
+            try:
+                self.calculator(
+                    self.frame_manager.seasonal_elo[year],
+                    formatted_scores,
+                    week,
+                    overwrite,
+                    self.k,
+                    scoring=self.scoring
+                )
+            except KeyError as e:
+                if e.args[0] == self.current_sports_year:
+                    raise KeyError('Current sports year has no frames')
         return self._return_frames(year)
 
     def _run_multiple(self, weeks: str, year: int, overwrite: bool = False) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:

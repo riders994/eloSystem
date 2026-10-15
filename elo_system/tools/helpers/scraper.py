@@ -92,11 +92,16 @@ class FantraxScraper(LeagueScraper):
         return self.league_wrapper
 
     def get_current_season_length(self) -> int:
-        return len(self.scoring_periods)
+        # scoring_period_results() returns the whole schedule, played or not,
+        # so counting it rates weeks nobody has played yet. Count only the
+        # periods Fantrax reports complete, to match Sleeper's last_scored_leg.
+        return sum(1 for period in self.scoring_periods.values() if period.complete)
 
     def get_playoff_start(self) -> int:
+        # Walks the whole schedule rather than the played weeks: the playoffs
+        # are scheduled long before they are played.
         if self.loaded:
-            i = self.get_current_season_length() + 1
+            i = len(self.scoring_periods) + 1
             po = True
             while po:
                 i -= 1

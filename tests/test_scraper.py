@@ -60,11 +60,11 @@ def _make_config(**overrides):
     return config
 
 
-def _patch_ft_league(monkeypatch, playoff_flags, teams=None):
+def _patch_ft_league(monkeypatch, playoff_flags, teams=None, played=None):
     """Patch the ft.League name used by scraper.py; return the mock class."""
     if teams is None:
         teams = make_default_teams(4)
-    periods = make_season(teams, playoff_flags)
+    periods = make_season(teams, playoff_flags, played)
     mock_cls = make_mock_league_cls(scoring_periods=periods, teams=teams)
     monkeypatch.setattr(scraper_mod.ft, 'League', mock_cls)
     return mock_cls, periods, teams
@@ -143,6 +143,22 @@ def test_get_current_season_length_counts_periods(monkeypatch):
     assert scraper.get_current_season_length() == 5
 
 
+def test_get_current_season_length_skips_unplayed_periods(monkeypatch):
+    # Fantrax returns the whole schedule up front; only completed periods
+    # have been played, so only they count toward the season so far.
+    _patch_ft_league(monkeypatch, [False, False, False, True, True], played=2)
+    scraper = FantraxScraper(_make_config())
+    scraper.login()
+    assert scraper.get_current_season_length() == 2
+
+
+def test_get_current_season_length_is_zero_before_tip_off(monkeypatch):
+    _patch_ft_league(monkeypatch, [False] * 23 + [True] * 2, played=0)
+    scraper = FantraxScraper(_make_config())
+    scraper.login()
+    assert scraper.get_current_season_length() == 0
+
+
 # ---------------------------------------------------------------------------
 # Playoff start derivation
 # ---------------------------------------------------------------------------
@@ -150,6 +166,14 @@ def test_get_current_season_length_counts_periods(monkeypatch):
 def test_get_playoff_start_walks_back_to_first_playoff_week(monkeypatch):
     # weeks 1-4 regular, weeks 5-6 playoffs -> playoffs start week 5
     _patch_ft_league(monkeypatch, [False, False, False, False, True, True])
+    scraper = FantraxScraper(_make_config())
+    scraper.login()
+    assert scraper.get_playoff_start() == 5
+
+
+def test_get_playoff_start_reads_the_schedule_not_the_played_weeks(monkeypatch):
+    # The playoffs are on the schedule before a single week is played.
+    _patch_ft_league(monkeypatch, [False] * 4 + [True] * 2, played=0)
     scraper = FantraxScraper(_make_config())
     scraper.login()
     assert scraper.get_playoff_start() == 5

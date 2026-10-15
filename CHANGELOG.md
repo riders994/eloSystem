@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-15
+
+Two fixes for dynasty leagues rated week by week during a live season.
+
+### Fixed
+- A dynasty league now rates its seasonal frame as well as its dynasty frame.
+  `EloLeague.run()` in dynasty mode used to rate only `dynasty_elo`, which left
+  `seasonal_elo[year]` at `week_0` for the whole season, and so did every CSV
+  and SQL dump of it. Each week's scores now rate both frames: the dynasty
+  frame at the dynasty week, off the carried-over ratings, and the seasonal
+  frame at the season's own week number, starting from the season's own
+  `week_0`. A season the old code left at `week_0` fills in when its weeks
+  are run again -- `run('0:N', year)` leaves dynasty weeks already on file
+  untouched and rates the seasonal ones that are missing.
+- `FantraxScraper.get_current_season_length()` counts only the scoring periods
+  that are complete. Fantrax hands back the whole schedule up front, so
+  counting all of it gave 25 weeks before a season had tipped off, and
+  `run_season`, `run_dynasty` and `change_dynasty` -- which rate weeks
+  `0..current_season_length` -- rated weeks nobody had played yet. This brings
+  Fantrax into line with Sleeper's `last_scored_leg`. `get_playoff_start()`
+  still reads the whole schedule, since playoff weeks are known before they
+  are played.
+
 ## [2.0.1] - 2026-07-28
 
 A publishable 2.0.0. The 2.0.0 upload to PyPI was broken and has been deleted,
@@ -321,7 +344,8 @@ SQL backend is additive and will land as minor releases.
 - The Postgres backend (`EloSQL`, `upsert_dataframe`) is scaffolded but not
   yet connected to the pipeline.
 
-[Unreleased]: https://github.com/riders994/eloSystem/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/riders994/eloSystem/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/riders994/eloSystem/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/riders994/eloSystem/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/riders994/eloSystem/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/riders994/eloSystem/compare/v1.0.0...v1.1.0
