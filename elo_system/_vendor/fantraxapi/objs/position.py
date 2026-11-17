@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 from .base import FantraxBaseObject
 
@@ -17,13 +17,17 @@ class Position(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
         self.id: str = self._data["id"]
         self.name: str = self._data["name"]
         self.short_name: str = self._data["shortName"]
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Position):
+            return NotImplemented
         return (self.id, self.name, self.short_name) == (other.id, other.name, other.short_name)
 
     def __hash__(self) -> int:
@@ -45,6 +49,8 @@ class PositionCount(FantraxBaseObject):
         short_name (str): Position Short Name.
 
     """
+
+    _data: dict
 
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)

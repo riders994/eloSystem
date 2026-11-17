@@ -2,7 +2,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from .base import FantraxBaseObject
-from .player import Player
+from .player import LivePlayer
 from .position import PositionCount
 from .roster import Roster
 
@@ -26,8 +26,11 @@ class Team(FantraxBaseObject):
         logo (str): Team Logo URL.
         commissioner (bool): Is the Team owned by a League commissioner? Not every data source reports this; it defaults to False.
         owners (str): Owner account name(s). Fetched lazily with one request on first access, then cached. Empty for placeholder teams (e.g. the Bye slot in an odd-sized playoff bracket), which aren't league members.
+        salary_cap (float | None): League salary cap for salary-cap leagues, else None. Fetched lazily with one roster request on first access, then cached.
 
     """
+
+    _data: dict
 
     def __init__(self, league: "League", team_id: str, data: dict) -> None:
         super().__init__(league, data)
@@ -36,12 +39,14 @@ class Team(FantraxBaseObject):
         self.short: str = self._data["shortName"]
         self.commissioner: bool = self._data.get("commissioner", False)
         self._owners: str | None = None
+        self._salary_cap: float | None = None
+        self._salary_cap_fetched: bool = False
         if "logoUrl512" in self._data:
             self.logo: str = self._data["logoUrl512"]
         elif "logoUrl256" in self._data:
-            self.logo: str = self._data["logoUrl256"]
+            self.logo = self._data["logoUrl256"]
         else:
-            self.logo: str = self._data["logoUrl128"]
+            self.logo = self._data["logoUrl128"]
 
     @property
     def owners(self) -> str:
@@ -60,6 +65,28 @@ class Team(FantraxBaseObject):
                 current._owners = self._owners
         return self._owners
 
+    @property
+    def salary_cap(self) -> float | None:
+        """League salary cap for salary-cap leagues, else None.
+
+        Fetched lazily via one roster request on first access, then cached. None for
+        placeholder teams (e.g. a bracket Bye slot), which have no roster. The cap is a
+        league-wide setting; per-team/period figures live on :class:`~fantraxapi.objs.roster.SalaryInfo`.
+        """
+        if not self._salary_cap_fetched:
+            if self.id not in self.league.team_lookup:
+                self._salary_cap = None
+            else:
+                roster = self.roster()
+                self._salary_cap = roster.salary.cap if roster.salary else None
+                # fetching the roster rebuilt league.teams; share the cache with the new instance
+                current = self.league.team_lookup.get(self.id)
+                if current is not None and current is not self:
+                    current._salary_cap = self._salary_cap
+                    current._salary_cap_fetched = True
+            self._salary_cap_fetched = True
+        return self._salary_cap
+
     def __str__(self) -> str:
         return self.name
 
@@ -75,14 +102,14 @@ class Team(FantraxBaseObject):
         """
         return self.league.position_counts(self.id, scoring_period_number=scoring_period_number)
 
-    def live_scores(self, score_date: date) -> list["Player"]:
-        """Returns a list of Player objects with scores for that day.
+    def live_scores(self, score_date: date) -> list["LivePlayer"]:
+        """Returns a list of LivePlayer objects with scores for that day.
 
         Args:
             score_date (date): Date of the Live Scoring.
 
         Returns:
-            list[Player]: List of Player objects with scores for that day.
+            list[LivePlayer]: List of LivePlayer objects with scores for that day.
 
         """
         return self.league.live_scores(score_date)[self.id]

@@ -17,17 +17,24 @@ class Transaction(FantraxBaseObject):
         id (str): Transaction ID.
         team (Team): Team who made the Transaction.
         date (datetime): Transaction Date.
+        period (int | None): Scoring period the transaction was processed in, if reported.
+        executed (bool): True when every move in the transaction was executed (e.g. a
+            waiver claim that succeeded rather than being cancelled).
         players (list[TransactionPlayer]): Players in the Transaction.
 
     """
 
     def __init__(self, league: "League", data: list[dict]) -> None:
         super().__init__(league, data)
-        self.id: str = self._data[0]["txSetId"]
-        self.team: Team = self.league.team(self._data[0]["cells"][0]["teamId"])
-        self.date: datetime = datetime.strptime(self._data[0]["cells"][1]["content"], "%a %b %d, %Y, %I:%M%p")
-        tc = "transactionCode"
-        self.players: list[TransactionPlayer] = [TransactionPlayer(self.league, p["scorer"], p["claimType"] if p[tc] == "CLAIM" else p[tc]) for p in self._data]
+        first = self._data[0]
+        cells = first["cells"]
+        self.id: str = first["txSetId"]
+        self.team: Team = self.league.team(cells[0]["teamId"])
+        self.date: datetime = datetime.strptime(cells[1]["content"], "%a %b %d, %Y, %I:%M%p")
+        period = cells[2]["content"].strip() if len(cells) > 2 else ""
+        self.period: int | None = int(period) if period.isdigit() else None
+        self.players: list[TransactionPlayer] = [TransactionPlayer(self.league, row) for row in self._data]
+        self.executed: bool = all(p.executed for p in self.players)
 
     def __str__(self) -> str:
         return str(self.players)
@@ -51,12 +58,20 @@ class TransactionPlayer(Player):
         injured_reserve (bool): Player on Injured Reserve.
         suspended (bool): Player Suspended.
         injured (bool): Player either Day-to-Day, Out, or on Injured Reserve.
-        type (str): Transaction Type.
+        type (str): Transaction Type ("WW"/"FA" for claims, otherwise the transaction
+            code such as "DROP"/"ADD").
+        transaction_type (str): Human-readable transaction type (e.g. "Drop", "Claim").
+        executed (bool): True when this move was executed rather than cancelled.
+        result (str): Result text for this move (e.g. "Executed").
     """
 
-    def __init__(self, league: "League", data: dict, transaction_type: str) -> None:
-        super().__init__(league, data)
-        self.type: str = transaction_type
+    def __init__(self, league: "League", row: dict) -> None:
+        super().__init__(league, row["scorer"])
+        code = row["transactionCode"]
+        self.type: str = row["claimType"] if code == "CLAIM" else code
+        self.transaction_type: str = row.get("transactionType", self.type)
+        self.executed: bool = bool(row.get("executed", False))
+        self.result: str = row.get("result", {}).get("content", "")
 
     def __str__(self) -> str:
         return f"{self.type} {self.name}"

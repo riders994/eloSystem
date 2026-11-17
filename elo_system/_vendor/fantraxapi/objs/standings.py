@@ -18,6 +18,8 @@ class Standings(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict, scoring_period_number: int | None = None) -> None:
         super().__init__(league, data)
         self.scoring_period_number: int | None = scoring_period_number

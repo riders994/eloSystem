@@ -5,7 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.3] - 2026-11-17
+
+The vendored fantraxapi synced to upstream, which gets a finished week scored
+in time for the Monday run.
+
+### Changed
+- The vendored `fantraxapi` is synced to FantraxAPI `4f98fa6` (was `ee81bea`).
+  Along with parsing hardening and new roster/salary-cap metadata, this brings
+  upstream's fixes for rotisserie matchups: home and away now follow Fantrax's
+  matchup id rather than row order, and a bye matchup is flagged `no_contest`
+  and scored 0.5-0.5 instead of taking whatever sat in the bye side's cells.
+  That changes bye weeks only.
+
+### Fixed
+- A Fantrax week now counts as scored the day after it ends, not two days
+  after. The old vendored `ScoringPeriodResult.complete` compared
+  `today > next` (where `next` is the day after the period's last day), so a
+  Sunday-ending week stayed incomplete through Monday and the Monday weekly
+  Elo run reported it unscored until Tuesday. The synced copy uses
+  `today >= next`; `current` likewise now includes a period's opening day.
+- `fantrax_formatter` reads a matchup's head-to-head result from
+  `home_score`/`away_score` instead of a `Pts` key in the category dicts.
+  The synced library keeps only real stat categories in `home_categories` /
+  `away_categories`, so the old lookup would have raised `KeyError:
+  'true_score'`. A new test builds a real `H2HRotisserie2` from raw Fantrax
+  rows so a future sync can't break this silently.
 
 ## [2.0.2] - 2026-10-15
 
@@ -344,7 +369,7 @@ SQL backend is additive and will land as minor releases.
 - The Postgres backend (`EloSQL`, `upsert_dataframe`) is scaffolded but not
   yet connected to the pipeline.
 
-[Unreleased]: https://github.com/riders994/eloSystem/compare/v2.0.2...HEAD
+[2.0.3]: https://github.com/riders994/eloSystem/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/riders994/eloSystem/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/riders994/eloSystem/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/riders994/eloSystem/compare/v1.1.0...v2.0.0

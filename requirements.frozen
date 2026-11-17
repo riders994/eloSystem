@@ -1,7 +1,7 @@
 certifi==2026.5.20
 charset-normalizer==3.4.7
 # fantraxapi is no longer a dependency: the fork is vendored at
-# elo_system/_vendor/fantraxapi (pinned to commit ee81bea, @stable v1.0.1).
+# elo_system/_vendor/fantraxapi (pinned to commit 4f98fa6, master v1.0.1).
 idna==3.18
 numpy==2.4.6
 packaging==25.0

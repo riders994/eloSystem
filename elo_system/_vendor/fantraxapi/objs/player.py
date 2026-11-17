@@ -1,6 +1,7 @@
 from datetime import date
 from typing import TYPE_CHECKING
 
+from ._parse import parse_float
 from .base import FantraxBaseObject
 from .position import Position
 
@@ -28,6 +29,8 @@ class Player(FantraxBaseObject):
         suspended (bool): Player Suspended.
         injured (bool): Player either Day-to-Day, Out, or on Injured Reserve.
     """
+
+    _data: dict
 
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
@@ -63,6 +66,35 @@ class Player(FantraxBaseObject):
         return self.name
 
 
+class ScoringCategory(FantraxBaseObject):
+    """A single scoring category's contribution to a :class:`LivePlayer`'s day.
+
+    Points-based and category leagues break a player's day into per-category stats
+    (Goals, Assists, Penalty Minutes, ...). Each one records both the raw stat value
+    and the fantasy points it contributed.
+
+    Attributes:
+        league (League): The League instance this object belongs to.
+        id (str): Fantrax scoring-category id (``scipId``).
+        name (str): Category name (e.g. "Goals").
+        short_name (str): Category short name (e.g. "G").
+        value (float): The raw stat value recorded for the category (e.g. 2 goals).
+        fantasy_points (float): Fantasy points the category contributed (can be negative).
+    """
+
+    def __init__(self, league: "League", scip_id: str, category: dict | None, stat: dict) -> None:
+        super().__init__(league, stat)
+        self.id: str = scip_id
+        self.name: str = category["name"] if category else ""
+        self.short_name: str = category["shortName"] if category else ""
+        # "av" is the numeric stat value; fall back to the string "sv" when absent.
+        self.value: float = parse_float(stat["av"] if "av" in stat else stat.get("sv"))
+        self.fantasy_points: float = parse_float(stat.get("fpts"))
+
+    def __str__(self) -> str:
+        return f"{self.short_name or self.id}: {self.value} ({self.fantasy_points})"
+
+
 class LivePlayer(Player):
     """Represents a single Player with Live Scoring.
 
@@ -84,10 +116,19 @@ class LivePlayer(Player):
         team (Team): Fantasy Team Player is on.
         points (float): Player Fantasy Points for the Points Date.
         points_date (date): date Player scored points.
+        categories (dict[str, ScoringCategory]): Per-category scoring breakdown keyed by
+            category short name (e.g. "G", "A", "PIM"). Empty when the league/response
+            carries no category detail.
     """
 
-    def __init__(self, league: "League", data: dict, team_id: str, points: float, points_date: date) -> None:
+    def __init__(self, league: "League", data: dict, team_id: str, stats: dict, points_date: date, category_lookup: dict[str, dict] | None = None) -> None:
         super().__init__(league, data)
         self.team: Team = self.league.team(team_id)
-        self.points: float = points
+        self.points: float = parse_float(stats.get("object1"))
         self.points_date: date = points_date
+        category_lookup = category_lookup or {}
+        self.categories: dict[str, ScoringCategory] = {}
+        for stat in stats.get("object2") or []:
+            scip_id = stat["scipId"]
+            category = ScoringCategory(self.league, scip_id, category_lookup.get(scip_id), stat)
+            self.categories[category.short_name or scip_id] = category

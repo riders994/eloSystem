@@ -1,7 +1,8 @@
 # NOTE: Vendored copy of riders994/FantraxAPI (fork of meisnate12/FantraxAPI).
-# Pinned to commit ee81bea250024cba670cd0a5a1a1849150dbb38c (@stable, v1.0.1).
-# Absolute ``fantraxapi`` imports were rewritten to relative imports so the
-# package works under ``elo_system._vendor.fantraxapi``. See ./LICENSE (MIT).
+# Pinned to commit 4f98fa6 (master, v1.0.1). Upstream already uses relative
+# imports, so the package works unmodified under ``elo_system._vendor.fantraxapi``;
+# the only local change is the hardcoded ``__version__`` below (importlib.metadata
+# cannot see a vendored package). See ./LICENSE (MIT).
 from .exceptions import FantraxException, NotLoggedIn, NotMemberOfLeague, NotTeamInLeague
 from .objs import League
 from .objs import League as FantraxAPI

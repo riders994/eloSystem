@@ -1,9 +1,13 @@
 """Tests for elo_system.tools.formatter (fantrax_formatter, sleeper_formatter
 and roto_calc)."""
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from elo_system._vendor.fantraxapi.exceptions import NotTeamInLeague
+from elo_system._vendor.fantraxapi.objs.scoring_period import H2HRotisserie2
 from elo_system.tools.basics import ROTO_COLS
 from elo_system.tools.helpers.formatter import (
     fantrax_formatter,
@@ -79,7 +83,7 @@ def test_nba_frame_has_category_true_score_and_opponent_columns(scoreboard):
         assert cat in board.columns
     assert 'true_score' in board.columns
     assert 'opponent' in board.columns
-    # 'Pts' is renamed away, not duplicated.
+    # The W/L/T/Pts summary columns never reach the frame.
     assert 'Pts' not in board.columns
 
 
@@ -299,3 +303,80 @@ def test_sleeper_formatter_unpaired_matchup_id_has_no_opponent():
 def test_sleeper_formatter_non_nfl_returns_empty():
     board = _sleeper_week([('u1', 1, 120.0, 1), ('u2', 2, 80.0, 1)])
     assert sleeper_formatter('nba', board).empty
+
+
+# ---------------------------------------------------------------------------
+# fantrax_formatter against the real vendored H2HRotisserie2
+# ---------------------------------------------------------------------------
+# The mocks above hand the formatter pre-shaped dicts, so they can drift from
+# what the vendored fantraxapi actually produces (as 'Pts' once did). This
+# builds a real H2HRotisserie2 from raw Fantrax row cells so a library sync
+# that changes the matchup's shape fails here rather than in the weekly run.
+
+# A real NBA H2H-categories header: the W/L/T/Pts summaries (keys win/loss/
+# tie/cp) come first, then the nine "scip" stat categories. Note the 'Pts'
+# summary and the 'PTS' category differ only in case and key.
+_ROTO_HEADER = [
+    {'key': 'win', 'shortName': 'W'},
+    {'key': 'loss', 'shortName': 'L'},
+    {'key': 'tie', 'shortName': 'T'},
+    {'key': 'cp', 'shortName': 'Pts'},
+] + [{'key': 'scip', 'shortName': cat} for cat in NBA_CATEGORIES]
+
+
+class _RotoLeague:
+    def __init__(self, teams):
+        self._teams = {t.id: t for t in teams}
+
+    def team(self, team_id):
+        try:
+            return self._teams[team_id]
+        except KeyError:
+            raise NotTeamInLeague(team_id) from None
+
+
+def _roto_row(team, wins, losses, ties, owner):
+    fg, ft, tpm, pts, reb, ast, st, blk, to, cat_pts = STATS[owner]
+    values = [wins, losses, ties, cat_pts, fg, ft, tpm, pts, reb, ast, st, blk, to]
+    return {'fixedCells': [{'teamId': team.id}],
+            'cells': [{'content': str(v)} for v in values]}
+
+
+def _real_matchup(league, home, away, home_wlt, away_wlt):
+    period = SimpleNamespace(league=league)
+    return H2HRotisserie2(
+        period, f'{away.id}_{home.id}', {'header': {'cells': _ROTO_HEADER}},
+        _roto_row(home, *home_wlt, home.owners),
+        _roto_row(away, *away_wlt, away.owners),
+    )
+
+
+@pytest.fixture
+def real_scoreboard(teams):
+    league = _RotoLeague(teams.values())
+    m1 = _real_matchup(league, teams['alice'], teams['bob'], (6, 3, 0), (3, 6, 0))
+    m2 = _real_matchup(league, teams['carol'], teams['dave'], (5, 4, 0), (4, 5, 0))
+    return make_scoring_period({'1': m1, '2': m2})
+
+
+def test_real_rotisserie_true_score_is_category_points_over_nine(real_scoreboard):
+    board = fantrax_formatter('nba', real_scoreboard)
+    for owner, row in STATS.items():
+        assert board.loc[owner, 'true_score'] == pytest.approx(row[-1] / 9)
+
+
+def test_real_rotisserie_frame_has_categories_but_no_summaries(real_scoreboard, teams):
+    board = fantrax_formatter('nba', real_scoreboard)
+    for cat in NBA_CATEGORIES:
+        assert cat in board.columns
+    for summary in ('W', 'L', 'T', 'Pts'):
+        assert summary not in board.columns
+    # 'PTS' is the real points category, not the 'Pts' category-points total.
+    assert board.loc['alice', 'PTS'] == 500
+    assert board.loc['alice', 'opponent'] == teams['bob'].id
+
+
+def test_real_rotisserie_roto_runs(real_scoreboard):
+    board = fantrax_formatter('nba', real_scoreboard, roto=True)
+    for owner in STATS:
+        assert board.loc[owner, 'roto'] == EXPECTED_ROTO[owner]

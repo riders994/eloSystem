@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 from .base import FantraxBaseObject
 
@@ -19,6 +19,8 @@ class Status(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
         self.id: str = self._data["id"]
@@ -27,7 +29,9 @@ class Status(FantraxBaseObject):
         self.short_name: str = self._data["shortName"]
         self.description: str = self._data["description"]
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Status):
+            return NotImplemented
         return (self.id, self.name, self.short_name) == (other.id, other.name, other.short_name)
 
     def __hash__(self) -> int:

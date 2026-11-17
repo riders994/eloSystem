@@ -1,3 +1,4 @@
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -24,6 +25,8 @@ class Trade(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
         info = {i["name"]: i["value"] for i in self._data["usefulInfo"]}
@@ -37,13 +40,22 @@ class Trade(FantraxBaseObject):
         for move in self._data["moves"]:
             self.moves.append(TradeDraftPick(self, move) if "draftPick" in move else TradePlayer(self, move))
 
+    # Fantrax stamps trade times in US Eastern, so the trailing token is EST in
+    # winter and EDT in summer (and could be any North-American zone abbreviation).
+    # The string carries no year, so strip the zone token and try each season-boundary
+    # year. The token is matched as a zone (ends in "T", or UTC/GMT) so the AM/PM that
+    # precedes it is never clobbered.
+    _TZ_SUFFIX = re.compile(r"\s+(?:[A-Z]{1,3}T|UTC|GMT)\s*$")
+
     def _parse_datetime(self, data: str) -> datetime:
-        start = datetime.strptime(data.replace("EDT", str(self.league.start_date.year)), "%b %d, %I:%M %p %Y")
-        end = datetime.strptime(data.replace("EDT", str(self.league.end_date.year)), "%b %d, %I:%M %p %Y")
-        if self.league.end_date >= start >= self.league.start_date:
-            return start
-        elif self.league.end_date >= end >= self.league.start_date:
-            return end
+        base = self._TZ_SUFFIX.sub("", data.strip())
+        for year in (self.league.start_date.year, self.league.end_date.year):
+            try:
+                parsed = datetime.strptime(f"{base} {year}", "%b %d, %I:%M %p %Y")
+            except ValueError:
+                continue
+            if self.league.start_date <= parsed <= self.league.end_date:
+                return parsed
         raise DateNotInSeason(data)
 
     def __str__(self) -> str:
@@ -51,6 +63,8 @@ class Trade(FantraxBaseObject):
 
 
 class TradeItem(FantraxBaseObject, ABC):
+    _data: dict
+
     def __init__(self, trade: "Trade", data: dict) -> None:
         super().__init__(trade.league, data)
         self.trade: Trade = trade

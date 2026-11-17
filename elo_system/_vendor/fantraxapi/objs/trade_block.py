@@ -27,6 +27,8 @@ class TradeBlock(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
         self.team: Team = self.league.team(self._data["teamId"])

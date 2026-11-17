@@ -1,5 +1,5 @@
 """Mock objects/factories emulating the shapes of the fantraxapi fork
-(riders994/FantraxAPI@stable) that elo_system actually touches.
+(riders994/FantraxAPI@4f98fa6) that elo_system actually touches.
 
 The real objects of interest:
 
@@ -7,9 +7,12 @@ The real objects of interest:
   ``.commissioner`` (bool), ``.owners`` (str -- owner account name, the
   cross-season-stable identifier elo_system keys everything on).
 - ``fantraxapi.objs.scoring_period.H2HRotisserie2`` (a ``Matchup``):
-  ``.home`` / ``.away`` Team objects, plus ``.home_categories`` /
-  ``.away_categories`` dicts of ``{'opponent': <other team id>,
-  '<category short name>': float, ..., 'Pts': float}``.
+  ``.home`` / ``.away`` Team objects, ``.home_score`` / ``.away_score``
+  (head-to-head category points, from Fantrax's "cp" column), plus
+  ``.home_categories`` / ``.away_categories`` dicts of
+  ``{'opponent': <other team id>, '<category short name>': float, ...}``
+  -- real stat categories only; the W/L/T/Pts summary columns are not in
+  them.
 - ``fantraxapi.objs.scoring_period.ScoringPeriodResult``: ``.playoffs``
   (bool), ``.name``, and ``.matchups`` -- a dict keyed by matchup id.
 - ``fantraxapi.objs.standings.Standings``: ``.ranks`` -- a dict of
@@ -45,8 +48,9 @@ _DEFAULT_STATS = {
 def make_category_stats(pts=4.5, **overrides):
     """Return a fresh 9-cat NBA stat dict plus the H2H 'Pts' score.
 
-    ``pts`` is the head-to-head category points ('Pts' key, what
-    fantrax_formatter turns into true_score by dividing by 9).
+    ``pts`` is the head-to-head category points. It rides along under a
+    'Pts' key only as input to :func:`make_matchup`, which moves it onto
+    ``home_score``/``away_score`` the way the real class does.
     Category values can be overridden by short name, e.g.
     ``make_category_stats(pts=6, TO=38.0, **{'FG%': 0.51})``.
     """
@@ -101,21 +105,25 @@ def make_matchup(home, away, home_stats=None, away_stats=None, matchup_key='1'):
 
     ``home_stats``/``away_stats`` are stat dicts as built by
     :func:`make_category_stats` (category short names + 'Pts').
+    'Pts' is popped out into ``home_score``/``away_score``, so the
+    categories dicts carry real categories only, like the real class.
     The 'opponent' key is injected here exactly like the real class does
     (it maps to the *other* side's team id).
     """
-    home_categories = {'opponent': away.id}
-    home_categories.update(home_stats if home_stats is not None else make_category_stats())
-    away_categories = {'opponent': home.id}
-    away_categories.update(away_stats if away_stats is not None else make_category_stats())
+    home_stats = dict(home_stats if home_stats is not None else make_category_stats())
+    away_stats = dict(away_stats if away_stats is not None else make_category_stats())
+    home_score = home_stats.pop('Pts', 0.5)
+    away_score = away_stats.pop('Pts', 0.5)
+    home_categories = {'opponent': away.id, **home_stats}
+    away_categories = {'opponent': home.id, **away_stats}
     return SimpleNamespace(
         matchup_key=matchup_key,
         home=home,
         away=away,
         home_categories=home_categories,
         away_categories=away_categories,
-        home_score=home_categories.get('Pts'),
-        away_score=away_categories.get('Pts'),
+        home_score=home_score,
+        away_score=away_score,
     )
 
 

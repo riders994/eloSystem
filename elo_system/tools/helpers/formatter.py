@@ -26,13 +26,16 @@ def roto_calc(scoreboard: pd.DataFrame) -> pd.DataFrame:
 
 def fantrax_formatter(league_type: str, scoreboard: ScoringPeriodResult, roto: bool = False) -> pd.DataFrame:
     if league_type == 'nba':
+        # The categories dicts hold only real stat categories (plus 'opponent');
+        # the head-to-head result -- category points, out of 9 -- lives on the
+        # matchup's home_score/away_score, read from Fantrax's "cp" column.
         matchup_dict = dict()
         for matchup in scoreboard.matchups.values():
             matchup_dict.update({
-                matchup.home.owners: matchup.home_categories,
-                matchup.away.owners: matchup.away_categories,
+                matchup.home.owners: {**matchup.home_categories, 'true_score': matchup.home_score},
+                matchup.away.owners: {**matchup.away_categories, 'true_score': matchup.away_score},
             })
-        board_df = pd.DataFrame.from_dict(matchup_dict, orient='index').rename(columns={'Pts': 'true_score'})
+        board_df = pd.DataFrame.from_dict(matchup_dict, orient='index')
         board_df['true_score'] = board_df['true_score'] / 9
         if roto:
             return roto_calc(board_df)

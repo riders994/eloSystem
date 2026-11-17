@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from typing import ParamSpec
 
 from requests import Session
 
@@ -22,8 +21,6 @@ from .team import Team
 from .trade import Trade
 from .trade_block import TradeBlock
 from .transaction import Transaction
-
-Param = ParamSpec("Param")
 
 
 def _index_playoff_brackets(bracket_responses: list[dict]) -> dict[int, list[tuple[str | None, dict]]]:
@@ -77,6 +74,20 @@ def _active_team_ids(response: dict) -> set[str]:
     return active
 
 
+def _build_category_lookup(response: dict) -> dict[str, dict]:
+    """Flatten ``scoringCategoriesPerGroup`` into ``{scipId: category}``.
+
+    Maps each scoring-category id (the ``scipId`` used in a scorer's per-category
+    stats) to its definition (name/shortName), so live scores can label the
+    category breakdown the response provides.
+    """
+    lookup: dict[str, dict] = {}
+    for categories in response.get("scoringCategoriesPerGroup", {}).values():
+        for category in categories:
+            lookup[category["id"]] = category
+    return lookup
+
+
 class League:
     """League Class to represent a Fantrax League.
 
@@ -107,8 +118,10 @@ class League:
         self.session: Session = Session() if session is None else session
         self.name: str = ""
         self.year: str = ""
-        self.start_date: datetime | None = None
-        self.end_date: datetime | None = None
+        # start_date/end_date are populated by reset_info() below (always called from
+        # __init__), so they are non-optional datetimes for the object's whole lifetime.
+        self.start_date: datetime
+        self.end_date: datetime
         self.positions: dict[str, Position] = {}
         self.status: dict[str, Status] = {}
         self.scoring_periods: dict[int, ScoringPeriod] = {}
@@ -133,9 +146,10 @@ class League:
         self.scoring_dates = {}
         for day in responses[2]["dates"]:
             scoring_date = datetime.strptime(day["object1"], "%Y-%m-%d").date()
-            key = scoring_date.strftime("%b %d")
-            if "0" in key and not key.endswith("0"):
-                key = key.replace("0", "")
+            # Fantrax's periodList renders the day with no leading zero ("Oct 5", not
+            # "Oct 05"), so build the lookup key from the unpadded day directly rather
+            # than string-munging strftime("%b %d") output.
+            key = f"{scoring_date.strftime('%b')} {scoring_date.day}"
             self.scoring_dates[period_to_day_list[key]] = scoring_date
         self.scoring_periods = {p["value"]: ScoringPeriod(self, p) for p in responses[3]["displayedLists"]["scoringPeriodList"] if p["name"] != "Full Season"}
         self._scoring_periods_lookup = None
@@ -153,6 +167,8 @@ class League:
             team = Team(self, team_id, previous[team_id]._data | data if team_id in previous else data)
             if team_id in previous:
                 team._owners = previous[team_id]._owners
+                team._salary_cap = previous[team_id]._salary_cap
+                team._salary_cap_fetched = previous[team_id]._salary_cap_fetched
             self.teams.append(team)
         self._team_lookup = None
 
@@ -228,9 +244,9 @@ class League:
             Standings: Standings object that corresponds with the period standing.
 
         """
-        kwargs = {}
+        kwargs: dict[str, str] = {}
         if scoring_period_number is not None:
-            kwargs["period"] = scoring_period_number
+            kwargs["period"] = str(scoring_period_number)
             kwargs["timeframeType"] = "BY_PERIOD"
             kwargs["timeStartType"] = "PERIOD_ONLY" if only_period else "FROM_SEASON_START"
         response = api.get_standings(self, **kwargs)
@@ -296,6 +312,12 @@ class League:
     def transactions(self, count: int = 100) -> list[Transaction]:
         """Returns a list of Transaction objects that represent the latest transactions.
 
+        ``count`` is the number of transactions wanted, which is independent of the
+        server's per-page cap: pages are fetched and accumulated until enough
+        transactions are collected or the history is exhausted. Rows are grouped by
+        ``txSetId`` over the combined pages so a transaction split across a page
+        boundary is still assembled correctly.
+
         Args:
             count (int): Number of transactions to return, defaults to 100.
 
@@ -303,8 +325,21 @@ class League:
             list[Transaction]: List of Transaction objects that represent the latest transactions.
 
         """
-        response = api.get_transaction_history(self, per_page_results=count)
-        return [Transaction(self, rows) for rows in _group_transaction_rows(response["table"]["rows"])]
+        rows: list[dict] = []
+        page = 1
+        while True:
+            response = api.get_transaction_history(self, page_number=page)
+            rows.extend(response["table"]["rows"])
+            # Fantrax packs whole transaction-sets onto a page, so the row count per page
+            # varies; the reliable end-of-history signal is the paginatedResultSet metadata.
+            total_pages = response.get("paginatedResultSet", {}).get("totalNumPages", page)
+            groups = _group_transaction_rows(rows)
+            # Stop once there are more groups than requested (so the count-th group is
+            # known-complete, not still being filled by a later page) or no pages remain.
+            if len(groups) > count or page >= total_pages:
+                break
+            page += 1
+        return [Transaction(self, group) for group in _group_transaction_rows(rows)[:count]]
 
     def position_counts(self, team_id: str, scoring_period_number: int | None = None) -> dict[str, PositionCount]:
         """Returns a Dictionary of PositionCount objects that represents the positions used for a given Team ID for a specific period or the latest period's standings when scoring_period_number is None.
@@ -343,14 +378,15 @@ class League:
         response = api.get_live_scoring_stats(self, scoring_date=scoring_date)
         scorer_map = _build_scorer_map(response)
         active_teams = _active_team_ids(response)
+        category_lookup = _build_category_lookup(response)
         final_scores: dict[str, list[LivePlayer]] = {}
         for team_id, data in response["statsPerTeam"]["allTeamsStats"].items():
             if team_id not in active_teams:
                 continue
             players = final_scores.setdefault(team_id, [])
-            for scorer_id, pts in data["ACTIVE"]["statsMap"].items():
+            for scorer_id, stats in data["ACTIVE"]["statsMap"].items():
                 if not scorer_id.startswith("_"):
-                    players.append(LivePlayer(self, scorer_map[scorer_id], team_id, pts["object1"], scoring_date))
+                    players.append(LivePlayer(self, scorer_map[scorer_id], team_id, stats, scoring_date, category_lookup))
         return final_scores
 
     def team_roster(self, team_id: str, period_number: int | None = None) -> Roster:

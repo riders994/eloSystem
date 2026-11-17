@@ -33,11 +33,14 @@ class FakeMatchup:
     def __init__(self, home_owner, away_owner, home_score, away_score):
         self.home = FakeTeamSide(home_owner)
         self.away = FakeTeamSide(away_owner)
-        # fantrax_formatter divides 'Pts' by 9 to get true_score, and the
-        # 'opponent' column carries the opposing *team id* (mapped back to a
-        # member id by EloLeague._rename).
-        self.home_categories = {'Pts': home_score * 9, 'opponent': f't_{away_owner}'}
-        self.away_categories = {'Pts': away_score * 9, 'opponent': f't_{home_owner}'}
+        # fantrax_formatter divides the category points (home_score /
+        # away_score) by 9 to get true_score, and the 'opponent' column
+        # carries the opposing *team id* (mapped back to a member id by
+        # EloLeague._rename).
+        self.home_score = home_score * 9
+        self.away_score = away_score * 9
+        self.home_categories = {'opponent': f't_{away_owner}'}
+        self.away_categories = {'opponent': f't_{home_owner}'}
 
 
 class FakeScoreboard:
